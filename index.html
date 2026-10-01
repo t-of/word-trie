@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#05060d">
+  <meta name="description" content="英単語帳を宇宙に浮かぶ文字の木として 3D で見る">
+  <title>word-trie — 英単語の 3D トライ木</title>
+
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="word-trie">
+  <meta property="og:title" content="word-trie — 英単語の 3D トライ木">
+  <meta property="og:description" content="英単語帳を宇宙に浮かぶ文字の木として 3D で見る">
+  <meta property="og:url" content="https://t-of.github.io/word-trie/">
+  <meta property="og:image" content="https://t-of.github.io/word-trie/icons/og.png">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta property="og:locale" content="ja_JP">
+  <meta name="twitter:card" content="summary_large_image">
+
+  <!-- apple-mobile-web-app-status-bar-style は付けない（black-translucent だと iOS 26 で上部が隠れる） -->
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="word-trie">
+  <link rel="manifest" href="./manifest.webmanifest">
+  <link rel="icon" href="./icons/icon.svg" type="image/svg+xml">
+  <link rel="icon" type="image/png" sizes="32x32" href="./icons/favicon-32.png">
+  <link rel="apple-touch-icon" href="./icons/apple-touch-icon.png">
+
+  <link rel="stylesheet" href="./webapp-kit/webapp-kit.css">
+  <link rel="stylesheet" href="./style.css">
+
+  <!-- Three.js は CDN から版を固定して読む（ビルドなし） -->
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://cdn.jsdelivr.net/npm/three@0.169.0/build/three.module.js",
+      "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.169.0/examples/jsm/"
+    }
+  }
+  </script>
+</head>
+<body>
+  <main class="app">
+    <header class="bar">
+      <h1 class="bar__title">word-trie</h1>
+      <div class="bar__actions">
+        <button class="pill" data-wak="install" hidden>アプリにする</button>
+        <button class="pill" data-wak="share">共有</button>
+      </div>
+    </header>
+
+    <section class="stage" id="stage">
+      <div id="scene"></div>
+      <div id="labels" aria-hidden="true"></div>
+
+      <div class="hud hud--top">
+        <div class="search">
+          <input id="search-input" type="text" inputmode="latin" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="英単語を入力…">
+          <div id="search-msg" class="search__msg" hidden></div>
+        </div>
+        <div class="hud__buttons">
+          <button id="btn-random" class="pill">ランダムな単語</button>
+          <button id="btn-reset" class="pill">全体を見る</button>
+        </div>
+      </div>
+
+      <div id="stats" class="stats"></div>
+
+      <div id="sheet" class="sheet" hidden>
+        <div class="sheet__head">
+          <span id="sheet-path" class="sheet__path"></span>
+          <button id="sheet-close" class="sheet__close" aria-label="閉じる">×</button>
+        </div>
+        <ul id="sheet-list" class="sheet__list"></ul>
+      </div>
+    </section>
+
+    <footer class="credit">
+      <a href="/">T.OF...</a> のアプリ ・
+      <a href="https://t-of.github.io/contact/">問い合わせ</a>
+    </footer>
+  </main>
+
+  <script src="./webapp-kit/webapp-kit.js"></script>
+  <script type="module" src="./main.js"></script>
+</body>
+</html>
