@@ -228,6 +228,16 @@ async function main() {
   const baseColors = nodes.map((n) => depthColor(n.depth, maxDepth, n.isEnd));
   const highlightColor = new THREE.Color(0xff53c8); // 他の深さの色と混同しない、はっきりした色
 
+  // 2D の実際の広がり（円とは限らない）。1〜2 語だけ飛び抜けて長い、といった外れ値に
+  // 合わせて全体を引きすぎないよう、97 パーセンタイルに合わせる（ごく一部の長い語の先は
+  // 「全体を見る」では画面の外に出ることがあるが、見た目の大きな塊はちょうど画面に収まる）
+  function percentile(values, p) {
+    const sorted = [...values].sort((a, b) => a - b);
+    return sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * p))];
+  }
+  const bound2DHalfX = Math.max(R, percentile(nodes.map((n) => Math.abs(n.pos2d.x)), 0.94));
+  const bound2DHalfY = Math.max(R, percentile(nodes.map((n) => Math.abs(n.pos2d.y)), 0.94));
+
   // 2D ⇔ 3D。選んだ方は localStorage に覚える。node.pos は今の表示モードの座標（切り替え時に書き換える）
   let is2D = loadView();
   for (const n of nodes) n.pos = (is2D ? n.pos2d : n.pos3d).clone();
@@ -238,15 +248,31 @@ async function main() {
   scene.background = new THREE.Color(0x05060d);
   buildBackground(scene);
 
-  const camera = new THREE.PerspectiveCamera(55, 1, 0.1, 2000);
-  const fovRad = (camera.fov * Math.PI) / 180;
+  // 2D はごく狭い画角（望遠）にして遠くから見る。パースの「手前が大きく奥が小さく」が
+  // ほぼ消え、真上から見た図に近づく（画角 θ での中心と端の大きさの比はおよそ cos(θ/2) だけで決まり、
+  // 距離によらない。55° だと ~0.89、9° だと ~0.997 とほぼ 1 になる）。
+  const FOV_3D = 55;
+  const FOV_2D = 9;
+  const camera = new THREE.PerspectiveCamera(FOV_3D, 1, 0.1, 8000);
+  const fovRad3D = (FOV_3D * Math.PI) / 180;
+  const fovRad2D = (FOV_2D * Math.PI) / 180;
   const overviewDist3D = Math.max(8, (maxDepth || 1) * R * 1.9);
   const overviewPos3D = new THREE.Vector3(overviewDist3D * 0.5, overviewDist3D * 0.35, overviewDist3D * 0.8);
-  // 2D は真上から見る。全体の半径（maxDepth×R）がちょうど収まる距離まで離れる
-  const overviewDist2D = Math.max(8, ((maxDepth || 1) * R / Math.sin(fovRad / 2)) * 1.25);
-  const overviewPos2D = new THREE.Vector3(0, 0, overviewDist2D);
-  const overviewPos = () => (is2D ? overviewPos2D : overviewPos3D);
-  const overviewDist = () => (is2D ? overviewDist2D : overviewDist3D);
+  // 2D は真上から見る。実際の x, y の広がりに余白 8% を足した分が、画面の縦・横どちらにも
+  // 収まる距離まで離れる（アスペクト比に応じて、縦・横のきつい方に合わせる）
+  const MARGIN_2D = 1.08;
+  function overviewDist2D() {
+    const aspect = camera.aspect || 1;
+    const distH = (bound2DHalfY * MARGIN_2D) / Math.tan(fovRad2D / 2);
+    const distW = (bound2DHalfX * MARGIN_2D) / (Math.tan(fovRad2D / 2) * aspect);
+    return Math.max(8, distH, distW);
+  }
+  const overviewPos2D = () => new THREE.Vector3(0, 0, overviewDist2D());
+  const overviewPos = () => (is2D ? overviewPos2D() : overviewPos3D);
+  const overviewDist = () => (is2D ? overviewDist2D() : overviewDist3D);
+  // #scene の大きさは CSS で決まっていて、canvas を作る前でも読める
+  camera.aspect = sceneEl.clientWidth / sceneEl.clientHeight || 1;
+  camera.updateProjectionMatrix();
   camera.position.copy(overviewPos());
 
   const renderer = new THREE.WebGLRenderer({ antialias: true });
@@ -257,11 +283,14 @@ async function main() {
   controls.enableDamping = true;
   controls.dampingFactor = 0.08;
   controls.minDistance = 1;
-  controls.maxDistance = Math.max(overviewDist3D, overviewDist2D) * 4;
+  controls.maxDistance = Math.max(overviewDist3D, overviewDist2D()) * 1.5;
   controls.target.set(0, 0, 0);
-  // 2D の間は回転を切り、1 本指/左ドラッグをパンにする（拡大はホイール・ピンチのまま）
+  // 2D の間は回転を切り、1 本指/左ドラッグをパンにする（拡大はホイール・ピンチのまま）。
+  // 画角も望遠にして、真上から見た図に近づける
   function applyControlMode() {
     controls.enableRotate = !is2D;
+    camera.fov = is2D ? FOV_2D : FOV_3D;
+    camera.updateProjectionMatrix();
     controls.mouseButtons = is2D
       ? { LEFT: THREE.MOUSE.PAN, MIDDLE: THREE.MOUSE.DOLLY, RIGHT: THREE.MOUSE.PAN }
       : { LEFT: THREE.MOUSE.ROTATE, MIDDLE: THREE.MOUSE.DOLLY, RIGHT: THREE.MOUSE.PAN };
@@ -402,54 +431,48 @@ async function main() {
   scene.add(new THREE.Points(glowGeo, glowMat));
 
   // ---- ラベル（文字）: プールを使い回す ----
+  // 道 → ホバー → 近い順、の優先度で置く。既に置いたラベルから 14px 以内に来るものは出さない
+  // （外周で団子にならないように）。
+  const LABEL_MIN_GAP = 14;
   const labelPool = [];
-  for (let i = 0; i < LABEL_COUNT + 1; i++) {
+  for (let i = 0; i < LABEL_COUNT + MAX_PATH + 1; i++) {
     const el = document.createElement('div');
     el.className = 'node-label';
     labelsEl.appendChild(el);
     labelPool.push(el);
   }
-  // 道の球のラベルは、近さの上位とは別枠で常に出す
-  const pathLabelPool = [];
-  for (let i = 0; i < MAX_PATH; i++) {
-    const el = document.createElement('div');
-    el.className = 'node-label is-path';
-    labelsEl.appendChild(el);
-    pathLabelPool.push(el);
-  }
   let currentPath = []; // 根からの道（道を選んでいないときは空）
-
-  function placeLabel(el, node, w, h) {
-    const v = node.pos.clone().project(camera);
-    if (v.z < -1 || v.z > 1 || v.x < -1.1 || v.x > 1.1 || v.y < -1.1 || v.y > 1.1) { el.classList.remove('is-visible'); return; }
-    el.style.left = `${(v.x * 0.5 + 0.5) * w}px`;
-    el.style.top = `${(-v.y * 0.5 + 0.5) * h}px`;
-    el.textContent = node.char.toUpperCase();
-    el.classList.add('is-visible');
-  }
 
   function updateLabels() {
     const w = sceneEl.clientWidth, h = sceneEl.clientHeight;
     const pathIds = new Set(currentPath.map((n) => n.id));
+    const candidates = [];
+    for (const n of currentPath) if (n.id !== 0) candidates.push({ node: n, kind: 'path' });
+    if (hoverNode && hoverNode.id !== 0 && !pathIds.has(hoverNode.id)) candidates.push({ node: hoverNode, kind: 'hover' });
     const scored = nodes
-      .filter((n) => !pathIds.has(n.id))
+      .filter((n) => n.id !== 0 && !pathIds.has(n.id) && n !== hoverNode)
       .map((n) => ({ n, d: n.pos.distanceToSquared(camera.position) }));
     scored.sort((a, b) => a.d - b.d);
-    const top = scored.slice(0, LABEL_COUNT).map((s) => s.n);
-    if (hoverNode && !pathIds.has(hoverNode.id) && !top.includes(hoverNode)) top[top.length - 1] = hoverNode;
-    for (let i = 0; i < labelPool.length; i++) {
-      const el = labelPool[i];
-      const node = top[i];
-      if (!node || node.id === 0) { el.classList.remove('is-visible'); continue; }
-      placeLabel(el, node, w, h);
-      el.classList.toggle('is-hover', node === hoverNode);
+    for (const { n } of scored.slice(0, LABEL_COUNT)) candidates.push({ node: n, kind: 'near' });
+
+    const placed = []; // 画面に出した位置 [x, y]
+    let used = 0;
+    for (const { node, kind } of candidates) {
+      if (used >= labelPool.length) break;
+      const v = node.pos.clone().project(camera);
+      if (v.z < -1 || v.z > 1 || v.x < -1.1 || v.x > 1.1 || v.y < -1.1 || v.y > 1.1) continue;
+      const x = (v.x * 0.5 + 0.5) * w, y = (-v.y * 0.5 + 0.5) * h;
+      if (placed.some(([px, py]) => Math.hypot(px - x, py - y) < LABEL_MIN_GAP)) continue;
+      placed.push([x, y]);
+      const el = labelPool[used++];
+      el.style.left = `${x}px`;
+      el.style.top = `${y}px`;
+      el.textContent = node.char.toUpperCase();
+      el.classList.add('is-visible');
+      el.classList.toggle('is-path', kind === 'path');
+      el.classList.toggle('is-hover', kind === 'hover');
     }
-    for (let i = 0; i < pathLabelPool.length; i++) {
-      const el = pathLabelPool[i];
-      const node = currentPath[i];
-      if (!node || node.id === 0) { el.classList.remove('is-visible'); continue; }
-      placeLabel(el, node, w, h);
-    }
+    for (let i = used; i < labelPool.length; i++) labelPool[i].classList.remove('is-visible');
   }
 
   // ---- 選択・道の光らせ方 ----
@@ -547,10 +570,10 @@ async function main() {
     let spread = R * 0.5;
     for (const n of nodeList) spread = Math.max(spread, n.pos.distanceTo(center));
     const last = nodeList[nodeList.length - 1];
-    const dist = (spread / Math.sin(fovRad / 2)) * 1.3 + R * 0.6;
+    const dist = (spread / Math.sin((is2D ? fovRad2D : fovRad3D) / 2)) * 1.3 + R * 0.6;
     const dir = is2D ? new THREE.Vector3(0, 0, 1) : cameraDir3D(last);
     const toPos = center.clone().add(dir.clone().multiplyScalar(dist));
-    if (is2D) toPos.z = dist; // 2D は常に真上から
+    if (is2D) { toPos.x = center.x; toPos.y = center.y; toPos.z = dist; } // 2D は常に真上から
     return { toPos, toTarget: center };
   }
 
@@ -558,7 +581,15 @@ async function main() {
   // 深さが浅いほど全体を見る距離に近づけ、深いほど寄る（根からの道の一部も見える）。
   function singleNodeDistance(node) {
     const t = maxDepth > 0 ? node.depth / maxDepth : 0;
-    const far = overviewDist() * 0.55;
+    if (is2D) {
+      // 距離ではなく「画面の半分の高さ（ワールド単位）」で浅い⇔深いを補間し、そこから画角で距離を出す。
+      // 2D は画角がごく狭いので、3D と同じ「距離」をそのまま流用すると寄りすぎてしまう。
+      const farHalf = bound2DHalfY * MARGIN_2D * 0.55;
+      const closeHalf = R * 1.7;
+      const half = farHalf * (1 - t) + closeHalf * t;
+      return half / Math.tan(fovRad2D / 2);
+    }
+    const far = overviewDist3D * 0.55;
     const close = R * 3.2;
     return far * (1 - t) + close * t;
   }
@@ -729,6 +760,13 @@ async function main() {
 
   function tick() {
     controls.update();
+    // 2D は必ず target の真上（パンのあとなどに角度がずれない念のための保険）
+    if (is2D) {
+      camera.position.x = controls.target.x;
+      camera.position.y = controls.target.y;
+      camera.up.set(0, 1, 0);
+      camera.lookAt(controls.target);
+    }
     updateLabels();
     renderer.render(scene, camera);
     requestAnimationFrame(tick);
