@@ -19,6 +19,7 @@ const SHELL = [
   './style.css',
   './main.js',
   './trie.js',
+  './words.csv',
   './words.sample.csv',
   './manifest.webmanifest',
   './webapp-kit/webapp-kit.css',

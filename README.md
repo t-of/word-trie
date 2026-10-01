@@ -18,8 +18,28 @@
 ### 単語データ
 
 - `words.csv`（1 行 1 語、`word,意味`。意味の列は無くてよい）を読む。無ければ `words.sample.csv`（仮の単語）を読む。
-- `words.csv` はこのリポジトリに含めない（`.gitignore`）。端末に置けば自分の単語帳として使える。SVL など他者の著作物のリストをそのまま使う場合は権利に注意する。
 - 小文字にそろえ、a〜z 以外の文字を含む語と重複した語は取り除く（除いた件数は画面の隅に出る）。
+- 今入っている `words.csv` は NGSL（New General Service List）の上位 1000 語。出典は下の「データの出典」。
+  自分の単語帳に差し替えたいときは、同じ形（`word,意味`）の CSV で `words.csv` を上書きする。
+
+## データの出典
+
+このリポジトリは、コード以外に外部のデータ（`words.csv`）を含みます。
+
+| 対象 | 出典 | ライセンス |
+|---|---|---|
+| 単語リストと頻度順（`words.csv`） | [New General Service List](https://www.newgeneralservicelist.com/new-general-service-list) — Browne, C., Culligan, B. & Phillips, J. | [CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/) |
+| 日本語訳（`words.csv`） | `ngsl-vocab-quiz` 由来、本プロジェクトで付与 | CC BY-SA 4.0（下記） |
+
+NGSL の表記（公式サイトのとおり）:
+New General Service List by Browne, C., Culligan, B., and Phillips, J. is licensed under a
+[Creative Commons Attribution-ShareAlike 4.0 International License](https://creativecommons.org/licenses/by-sa/4.0/).
+
+**ShareAlike の範囲:** `words.csv` は NGSL の各行に訳を足したものなので、**ファイル全体を CC BY-SA 4.0** とします（訳も含む）。
+アプリのコード（`trie.js`・`main.js` など）は NGSL を含まないので MIT のままです。
+画面の下にも、この出典を出しています。
+
+`words.csv` は NGSL の上位 1000 語を抜き出したものです（変更点）。
 
 ## アプリとして入れる（PWA）
 
