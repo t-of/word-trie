@@ -84,6 +84,7 @@ button { font: inherit; color: inherit; }
 }
 .node-label.is-visible { display: block; }
 .node-label.is-hover { color: var(--accent); font-size: 14px; }
+.node-label.is-path { color: #ff8fe0; font-size: 14px; font-weight: 800; }
 
 .hud {
   position: absolute;

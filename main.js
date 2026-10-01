@@ -245,9 +245,11 @@ async function main() {
     bucketGroups.get(key).push(node);
   }
   const bucketMeshes = [];
+  const dimmables = []; // { mat, color } の一覧。道を選んでいる間、これ以外の色を暗くする
   for (const [key, list] of bucketGroups) {
     const [depthStr, endStr] = key.split(':');
-    const mat = new THREE.MeshBasicMaterial({ color: depthColor(Number(depthStr), maxDepth, endStr === '1') });
+    const color = depthColor(Number(depthStr), maxDepth, endStr === '1');
+    const mat = new THREE.MeshBasicMaterial({ color });
     const mesh = new THREE.InstancedMesh(sphereGeo, mat, list.length);
     const nodeIds = new Array(list.length);
     list.forEach((node, i) => {
@@ -261,10 +263,22 @@ async function main() {
     mesh.userData.nodeIds = nodeIds;
     scene.add(mesh);
     bucketMeshes.push(mesh);
+    dimmables.push({ mat, color });
   }
-  const rootMesh = new THREE.Mesh(sphereGeo, new THREE.MeshBasicMaterial({ color: 0x33415a }));
+  const rootColor = new THREE.Color(0x33415a);
+  const rootMat = new THREE.MeshBasicMaterial({ color: rootColor });
+  const rootMesh = new THREE.Mesh(sphereGeo, rootMat);
   rootMesh.scale.setScalar(sphereScale(root));
   scene.add(rootMesh);
+  dimmables.push({ mat: rootMat, color: rootColor });
+
+  // 道を選んでいる間、道以外の球・にじみを暗くして、道をはっきり見せる
+  const DIM_FACTOR = 0.22;
+  function setDimmed(active) {
+    const f = active ? DIM_FACTOR : 1;
+    for (const { mat, color } of dimmables) mat.color.copy(color).multiplyScalar(f);
+    glowMat.opacity = active ? 0.8 * DIM_FACTOR : 0.8;
+  }
 
   // 道を光らせるための、白い球を重ねる InstancedMesh（根からの道の長さぶん）
   const MAX_PATH = 80;
@@ -302,12 +316,12 @@ async function main() {
   const edgeMesh = new THREE.LineSegments(edgeGeo, edgeMat);
   scene.add(edgeMesh);
 
-  function resetEdgeColor(id) {
+  function resetEdgeColor(id, factor = 1) {
     const node = nodes[id];
     if (!node.parent) return;
     const i = edgeIndexByNodeId.get(id);
     const c1 = baseColors[node.parent.id], c2 = baseColors[id];
-    edgeColors.set([c1.r, c1.g, c1.b, c2.r, c2.g, c2.b], i * 6);
+    edgeColors.set([c1.r * factor, c1.g * factor, c1.b * factor, c2.r * factor, c2.g * factor, c2.b * factor], i * 6);
   }
   function highlightEdgeColor(id) {
     const i = edgeIndexByNodeId.get(id);
@@ -342,24 +356,46 @@ async function main() {
     labelsEl.appendChild(el);
     labelPool.push(el);
   }
+  // 道の球のラベルは、近さの上位とは別枠で常に出す
+  const pathLabelPool = [];
+  for (let i = 0; i < MAX_PATH; i++) {
+    const el = document.createElement('div');
+    el.className = 'node-label is-path';
+    labelsEl.appendChild(el);
+    pathLabelPool.push(el);
+  }
+  let currentPath = []; // 根からの道（道を選んでいないときは空）
+
+  function placeLabel(el, node, w, h) {
+    const v = node.pos.clone().project(camera);
+    if (v.z < -1 || v.z > 1 || v.x < -1.1 || v.x > 1.1 || v.y < -1.1 || v.y > 1.1) { el.classList.remove('is-visible'); return; }
+    el.style.left = `${(v.x * 0.5 + 0.5) * w}px`;
+    el.style.top = `${(-v.y * 0.5 + 0.5) * h}px`;
+    el.textContent = node.char.toUpperCase();
+    el.classList.add('is-visible');
+  }
 
   function updateLabels() {
     const w = sceneEl.clientWidth, h = sceneEl.clientHeight;
-    const scored = nodes.map((n) => ({ n, d: n.pos.distanceToSquared(camera.position) }));
+    const pathIds = new Set(currentPath.map((n) => n.id));
+    const scored = nodes
+      .filter((n) => !pathIds.has(n.id))
+      .map((n) => ({ n, d: n.pos.distanceToSquared(camera.position) }));
     scored.sort((a, b) => a.d - b.d);
     const top = scored.slice(0, LABEL_COUNT).map((s) => s.n);
-    if (hoverNode && !top.includes(hoverNode)) top[top.length - 1] = hoverNode;
+    if (hoverNode && !pathIds.has(hoverNode.id) && !top.includes(hoverNode)) top[top.length - 1] = hoverNode;
     for (let i = 0; i < labelPool.length; i++) {
       const el = labelPool[i];
       const node = top[i];
       if (!node || node.id === 0) { el.classList.remove('is-visible'); continue; }
-      const v = node.pos.clone().project(camera);
-      if (v.z < -1 || v.z > 1 || v.x < -1.1 || v.x > 1.1 || v.y < -1.1 || v.y > 1.1) { el.classList.remove('is-visible'); continue; }
-      el.style.left = `${(v.x * 0.5 + 0.5) * w}px`;
-      el.style.top = `${(-v.y * 0.5 + 0.5) * h}px`;
-      el.textContent = node.char.toUpperCase();
-      el.classList.add('is-visible');
+      placeLabel(el, node, w, h);
       el.classList.toggle('is-hover', node === hoverNode);
+    }
+    for (let i = 0; i < pathLabelPool.length; i++) {
+      const el = pathLabelPool[i];
+      const node = currentPath[i];
+      if (!node || node.id === 0) { el.classList.remove('is-visible'); continue; }
+      placeLabel(el, node, w, h);
     }
   }
 
@@ -368,6 +404,8 @@ async function main() {
   let hoverNode = null;
 
   function resetColors() {
+    currentPath = [];
+    setDimmed(false);
     for (const id of edgeNodeIds) resetEdgeColor(id);
     edgeGeo.attributes.color.needsUpdate = true;
     hideHighlightFrom(0);
@@ -402,8 +440,10 @@ async function main() {
   }
 
   function lightPath(targetId) {
-    for (const id of edgeNodeIds) resetEdgeColor(id);
+    setDimmed(true);
+    for (const id of edgeNodeIds) resetEdgeColor(id, DIM_FACTOR);
     const path = pathToRoot(nodes[targetId]);
+    currentPath = path;
     let segCount = 0;
     path.forEach((node, i) => {
       highlightEdgeColor(node.id);
