@@ -201,23 +201,59 @@ async function main() {
   controls.maxDistance = overviewDist * 4;
   controls.target.set(0, 0, 0);
 
-  // 球: 1 つの InstancedMesh。色は instanceColor で、光らせるのは色の書き換えで行う
+  // 球: 深さ・単語の終わりかどうかでまとめた InstancedMesh（色は材質ごとの固定色）。
+  // instanceColor（球ごとの色の書き換え）はブラウザによって描画されない個体があったため使わない。
+  // 道を光らせるのは、同じ位置に重ねる白い InstancedMesh（highlightMesh）の表示・非表示で行う。
   const sphereGeo = new THREE.IcosahedronGeometry(1, 1);
-  const sphereMat = new THREE.MeshBasicMaterial({ vertexColors: true });
-  const sphereMesh = new THREE.InstancedMesh(sphereGeo, sphereMat, nodeCount);
   const dummy = new THREE.Object3D();
-  for (const node of nodes) {
+  const sphereScale = (node) => {
     const base = node.id === 0 ? 0.1 : Math.max(0.1, 0.26 - node.depth * 0.008);
-    const scale = node.isEnd ? base * 1.7 : base;
-    dummy.position.copy(node.pos);
-    dummy.scale.setScalar(scale);
-    dummy.updateMatrix();
-    sphereMesh.setMatrixAt(node.id, dummy.matrix);
-    sphereMesh.setColorAt(node.id, baseColors[node.id]);
+    return node.isEnd ? base * 1.7 : base;
+  };
+  const bucketGroups = new Map(); // "深さ:終わりかどうか" → ノード一覧
+  for (const node of nodes) {
+    if (node.id === 0) continue;
+    const key = `${node.depth}:${node.isEnd ? 1 : 0}`;
+    if (!bucketGroups.has(key)) bucketGroups.set(key, []);
+    bucketGroups.get(key).push(node);
   }
-  sphereMesh.instanceMatrix.needsUpdate = true;
-  sphereMesh.instanceColor.needsUpdate = true;
-  scene.add(sphereMesh);
+  const bucketMeshes = [];
+  for (const [key, list] of bucketGroups) {
+    const [depthStr, endStr] = key.split(':');
+    const mat = new THREE.MeshBasicMaterial({ color: depthColor(Number(depthStr), maxDepth, endStr === '1') });
+    const mesh = new THREE.InstancedMesh(sphereGeo, mat, list.length);
+    const nodeIds = new Array(list.length);
+    list.forEach((node, i) => {
+      dummy.position.copy(node.pos);
+      dummy.scale.setScalar(sphereScale(node));
+      dummy.updateMatrix();
+      mesh.setMatrixAt(i, dummy.matrix);
+      nodeIds[i] = node.id;
+    });
+    mesh.instanceMatrix.needsUpdate = true;
+    mesh.userData.nodeIds = nodeIds;
+    scene.add(mesh);
+    bucketMeshes.push(mesh);
+  }
+  const rootMesh = new THREE.Mesh(sphereGeo, new THREE.MeshBasicMaterial({ color: 0x33415a }));
+  rootMesh.scale.setScalar(sphereScale(root));
+  scene.add(rootMesh);
+
+  // 道を光らせるための、白い球を重ねる InstancedMesh（根からの道の長さぶん）
+  const MAX_PATH = 80;
+  const highlightMat = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.95, blending: THREE.AdditiveBlending, depthWrite: false });
+  const highlightMesh = new THREE.InstancedMesh(sphereGeo, highlightMat, MAX_PATH);
+  function hideHighlightFrom(start) {
+    for (let i = start; i < MAX_PATH; i++) {
+      dummy.position.set(0, 0, 0);
+      dummy.scale.setScalar(0);
+      dummy.updateMatrix();
+      highlightMesh.setMatrixAt(i, dummy.matrix);
+    }
+  }
+  hideHighlightFrom(0);
+  highlightMesh.instanceMatrix.needsUpdate = true;
+  scene.add(highlightMesh);
 
   // 線: 1 つの LineSegments。頂点色で光らせる。子ノード 1 つにつき 1 本（根向きの辺）
   const edgeNodeIds = nodes.filter((n) => n.parent).map((n) => n.id);
@@ -295,10 +331,10 @@ async function main() {
   let hoverNode = null;
 
   function resetColors() {
-    for (const node of nodes) sphereMesh.setColorAt(node.id, baseColors[node.id]);
     for (const id of edgeNodeIds) resetEdgeColor(id);
-    sphereMesh.instanceColor.needsUpdate = true;
     edgeGeo.attributes.color.needsUpdate = true;
+    hideHighlightFrom(0);
+    highlightMesh.instanceMatrix.needsUpdate = true;
   }
 
   function showSheet(node) {
@@ -328,14 +364,19 @@ async function main() {
   }
 
   function lightPath(targetId) {
-    resetColors();
+    for (const id of edgeNodeIds) resetEdgeColor(id);
     const path = pathToRoot(nodes[targetId]);
-    for (const node of path) {
-      sphereMesh.setColorAt(node.id, highlightColor);
+    path.forEach((node, i) => {
       highlightEdgeColor(node.id);
-    }
-    sphereMesh.instanceColor.needsUpdate = true;
+      if (i >= MAX_PATH) return;
+      dummy.position.copy(node.pos);
+      dummy.scale.setScalar(sphereScale(node) * 1.4);
+      dummy.updateMatrix();
+      highlightMesh.setMatrixAt(i, dummy.matrix);
+    });
+    hideHighlightFrom(path.length);
     edgeGeo.attributes.color.needsUpdate = true;
+    highlightMesh.instanceMatrix.needsUpdate = true;
   }
 
   function animateCamera(toPos, toTarget, duration = 700) {
@@ -387,8 +428,10 @@ async function main() {
 
   function pickNode() {
     raycaster.setFromCamera(pointerNdc, camera);
-    const hit = raycaster.intersectObject(sphereMesh)[0];
-    return hit && hit.instanceId != null ? nodes[hit.instanceId] : null;
+    const hit = raycaster.intersectObjects(bucketMeshes)[0];
+    if (!hit || hit.instanceId == null) return null;
+    const id = hit.object.userData.nodeIds[hit.instanceId];
+    return nodes[id];
   }
 
   renderer.domElement.addEventListener('pointerdown', (e) => { downPos = { x: e.clientX, y: e.clientY }; });
