@@ -127,6 +127,7 @@ button { font: inherit; color: inherit; }
 
 .hud__buttons {
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
 }
 .hud__buttons .pill {

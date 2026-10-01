@@ -2,7 +2,7 @@
 // トライ木の組み立て（整形・構築）は trie.js にまとめてあり、node からも同じものを検査できる（test/trie.test.mjs）。
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { parseCsv, buildWordEntries, buildTrie, pathWord, wordsWithPrefix, normalize } from './trie.js';
+import { parseCsv, buildWordEntries, buildTrie, pathWord, wordsWithPrefix, normalize, layoutRadial } from './trie.js';
 
 WebAppKit.init({ title: 'word-trie', text: '英単語帳を宇宙に浮かぶ文字の木として 3D で見る' });
 
@@ -10,7 +10,16 @@ if ('serviceWorker' in navigator) {
   navigator.serviceWorker.register('./sw.js');
 }
 
-const R = 1.9;          // 深さ 1 ごとの半径（殻の間かく）
+// localStorage はほかのアプリと共有される。キーは 'word-trie.' で始める（RULES.md §3）
+const STORE = 'word-trie.';
+function loadView() {
+  try { return localStorage.getItem(STORE + 'view') === '2d'; } catch { return false; }
+}
+function saveView(is2D) {
+  try { localStorage.setItem(STORE + 'view', is2D ? '2d' : '3d'); } catch { /* 保存できなくても遊べる */ }
+}
+
+const R = 1.9;          // 深さ 1 ごとの半径（殻の間かく。3D・2D 共通）
 const LABEL_COUNT = 40; // ラベルを出す球の数（+ マウスが乗った球）
 const RANDOM_TICK = 250; // ランダムな単語を 1 文字ずつ光らせる間かく（ms）
 
@@ -24,6 +33,7 @@ const sheetPathEl = document.getElementById('sheet-path');
 const sheetListEl = document.getElementById('sheet-list');
 const btnRandom = document.getElementById('btn-random');
 const btnReset = document.getElementById('btn-reset');
+const btnView = document.getElementById('btn-view');
 const sheetClose = document.getElementById('sheet-close');
 
 // ---- データの読み込み ----
@@ -98,16 +108,16 @@ function tiltDir(dir, angle, azimuth) {
 // 子の azimuth（円すいの中の向き）は、常にその場で 0〜2π をまるごと配り直す。
 // 先祖から受け継いだ細い範囲をさらに割っていく作りだと、深いノードほど範囲が指数的に狭まり、
 // 枝が同じ方向に折り重なってしまう（2026-10 に発見）。
-function layoutTree(root) {
-  root.pos = new THREE.Vector3(0, 0, 0);
+function layoutTree3D(root) {
+  root.pos3d = new THREE.Vector3(0, 0, 0);
   const firstChildren = [...root.children.values()];
   const dirs = fibonacciSphere(firstChildren.length);
-  firstChildren.forEach((child, i) => layoutSubtree(child, dirs[i], 1));
+  firstChildren.forEach((child, i) => layoutSubtree3D(child, dirs[i], 1));
 }
 
-function layoutSubtree(node, dir, depth) {
-  node.dir = dir;
-  node.pos = dir.clone().multiplyScalar(depth * R);
+function layoutSubtree3D(node, dir, depth) {
+  node.dir3d = dir;
+  node.pos3d = dir.clone().multiplyScalar(depth * R);
   const children = [...node.children.values()];
   if (!children.length) return;
   const totalWeight = children.reduce((s, c) => s + c.leafWeight, 0);
@@ -119,9 +129,22 @@ function layoutSubtree(node, dir, depth) {
     const span = (child.leafWeight / totalWeight) * FULL;
     const mid = a + span / 2;
     const childDir = tiltDir(dir, coneAngle, mid);
-    layoutSubtree(child, childDir, depth + 1);
+    layoutSubtree3D(child, childDir, depth + 1);
     a += span;
   }
+}
+
+// 2D の平面放射状レイアウト。角度の配り方そのもの（重ならないこと）は trie.js の
+// layoutRadial（DOM に依らない。test/trie.test.mjs で検査）に任せ、ここでは
+// 角度 + 深さ×R を x, y 座標に変換するだけ。
+function layoutTree2D(root) {
+  layoutRadial(root);
+  (function walk(node) {
+    node.pos2d = node.depth === 0
+      ? new THREE.Vector3(0, 0, 0)
+      : new THREE.Vector3(Math.cos(node.angle) * node.depth * R, Math.sin(node.angle) * node.depth * R, 0);
+    for (const child of node.children.values()) walk(child);
+  })(root);
 }
 
 function flattenNodes(root, nodeCount) {
@@ -192,7 +215,8 @@ async function main() {
   const raw = parseCsv(text);
   const { entries, total, removedInvalid, removedDuplicate } = buildWordEntries(raw);
   const { root, nodeCount, wordCount } = buildTrie(entries);
-  layoutTree(root);
+  layoutTree3D(root);
+  layoutTree2D(root); // 角度の配り方（重ならないこと）は trie.js の layoutRadial、node から検査できる
   const nodes = flattenNodes(root, nodeCount);
   const endNodes = nodes.filter((n) => n.isEnd);
   let maxDepth = 0;
@@ -204,15 +228,26 @@ async function main() {
   const baseColors = nodes.map((n) => depthColor(n.depth, maxDepth, n.isEnd));
   const highlightColor = new THREE.Color(0xff53c8); // 他の深さの色と混同しない、はっきりした色
 
+  // 2D ⇔ 3D。選んだ方は localStorage に覚える。node.pos は今の表示モードの座標（切り替え時に書き換える）
+  let is2D = loadView();
+  for (const n of nodes) n.pos = (is2D ? n.pos2d : n.pos3d).clone();
+  btnView.textContent = is2D ? '3D' : '2D'; // ボタンには切り替え先のモードを出す
+
   // ---- three.js の下ごしらえ ----
   const scene = new THREE.Scene();
   scene.background = new THREE.Color(0x05060d);
   buildBackground(scene);
 
   const camera = new THREE.PerspectiveCamera(55, 1, 0.1, 2000);
-  const overviewDist = Math.max(8, (maxDepth || 1) * R * 1.9);
-  const overviewPos = new THREE.Vector3(overviewDist * 0.5, overviewDist * 0.35, overviewDist * 0.8);
-  camera.position.copy(overviewPos);
+  const fovRad = (camera.fov * Math.PI) / 180;
+  const overviewDist3D = Math.max(8, (maxDepth || 1) * R * 1.9);
+  const overviewPos3D = new THREE.Vector3(overviewDist3D * 0.5, overviewDist3D * 0.35, overviewDist3D * 0.8);
+  // 2D は真上から見る。全体の半径（maxDepth×R）がちょうど収まる距離まで離れる
+  const overviewDist2D = Math.max(8, ((maxDepth || 1) * R / Math.sin(fovRad / 2)) * 1.25);
+  const overviewPos2D = new THREE.Vector3(0, 0, overviewDist2D);
+  const overviewPos = () => (is2D ? overviewPos2D : overviewPos3D);
+  const overviewDist = () => (is2D ? overviewDist2D : overviewDist3D);
+  camera.position.copy(overviewPos());
 
   const renderer = new THREE.WebGLRenderer({ antialias: true });
   renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
@@ -222,8 +257,19 @@ async function main() {
   controls.enableDamping = true;
   controls.dampingFactor = 0.08;
   controls.minDistance = 1;
-  controls.maxDistance = overviewDist * 4;
+  controls.maxDistance = Math.max(overviewDist3D, overviewDist2D) * 4;
   controls.target.set(0, 0, 0);
+  // 2D の間は回転を切り、1 本指/左ドラッグをパンにする（拡大はホイール・ピンチのまま）
+  function applyControlMode() {
+    controls.enableRotate = !is2D;
+    controls.mouseButtons = is2D
+      ? { LEFT: THREE.MOUSE.PAN, MIDDLE: THREE.MOUSE.DOLLY, RIGHT: THREE.MOUSE.PAN }
+      : { LEFT: THREE.MOUSE.ROTATE, MIDDLE: THREE.MOUSE.DOLLY, RIGHT: THREE.MOUSE.PAN };
+    controls.touches = is2D
+      ? { ONE: THREE.TOUCH.PAN, TWO: THREE.TOUCH.DOLLY_PAN }
+      : { ONE: THREE.TOUCH.ROTATE, TWO: THREE.TOUCH.DOLLY_PAN };
+  }
+  applyControlMode();
 
   // 球: 深さ・単語の終わりかどうかでまとめた InstancedMesh（色は材質ごとの固定色）。
   // instanceColor（球ごとの色の書き換え）はブラウザによって描画されない個体があったため使わない。
@@ -237,6 +283,13 @@ async function main() {
     const base = Math.max(R * 0.028, R * 0.1 * shrink);
     return node.isEnd ? base * 1.55 : base * 0.82;
   };
+  // 2D は隣との間かく（扇形の幅）に合わせてさらに小さく。外周ほど扇形が細くなるので、はみ出さない上限を掛ける
+  const sphere2DScale = (node) => {
+    if (node.id === 0) return R * 0.05;
+    const arcLimit = Math.max(R * 0.01, (node.angleSpan || 0.001) * node.depth * R * 0.4);
+    return Math.min(sphereScale(node), arcLimit);
+  };
+  const nodeScale = (node) => (is2D ? sphere2DScale(node) : sphereScale(node));
   const bucketGroups = new Map(); // "深さ:終わりかどうか" → ノード一覧
   for (const node of nodes) {
     if (node.id === 0) continue;
@@ -254,7 +307,7 @@ async function main() {
     const nodeIds = new Array(list.length);
     list.forEach((node, i) => {
       dummy.position.copy(node.pos);
-      dummy.scale.setScalar(sphereScale(node));
+      dummy.scale.setScalar(nodeScale(node));
       dummy.updateMatrix();
       mesh.setMatrixAt(i, dummy.matrix);
       nodeIds[i] = node.id;
@@ -268,7 +321,7 @@ async function main() {
   const rootColor = new THREE.Color(0x33415a);
   const rootMat = new THREE.MeshBasicMaterial({ color: rootColor });
   const rootMesh = new THREE.Mesh(sphereGeo, rootMat);
-  rootMesh.scale.setScalar(sphereScale(root));
+  rootMesh.scale.setScalar(nodeScale(root));
   scene.add(rootMesh);
   dimmables.push({ mat: rootMat, color: rootColor });
 
@@ -449,7 +502,7 @@ async function main() {
       highlightEdgeColor(node.id);
       if (i >= MAX_PATH) return;
       dummy.position.copy(node.pos);
-      dummy.scale.setScalar(sphereScale(node) * 1.3);
+      dummy.scale.setScalar(nodeScale(node) * 1.3);
       dummy.updateMatrix();
       highlightMesh.setMatrixAt(i, dummy.matrix);
       if (node.parent) {
@@ -483,17 +536,21 @@ async function main() {
 
   // 球の一覧をちょうど収める位置を計算する（中心を見て、全部が視野に入る距離まで下がる）。
   // ランダム再生の最後（道の全体を見せたいとき）に使う。
+  function cameraDir3D(node) {
+    return (node && node.id !== 0 && node.dir3d) || new THREE.Vector3(0.5, 0.35, 0.8).normalize();
+  }
+
   function frameNodes(nodeList) {
     const center = new THREE.Vector3();
     for (const n of nodeList) center.add(n.pos);
     center.divideScalar(nodeList.length);
     let spread = R * 0.5;
     for (const n of nodeList) spread = Math.max(spread, n.pos.distanceTo(center));
-    const fovRad = (camera.fov * Math.PI) / 180;
     const last = nodeList[nodeList.length - 1];
     const dist = (spread / Math.sin(fovRad / 2)) * 1.3 + R * 0.6;
-    const dir = (last && last.id !== 0 && last.dir) || new THREE.Vector3(0.5, 0.35, 0.8).normalize();
+    const dir = is2D ? new THREE.Vector3(0, 0, 1) : cameraDir3D(last);
     const toPos = center.clone().add(dir.clone().multiplyScalar(dist));
+    if (is2D) toPos.z = dist; // 2D は常に真上から
     return { toPos, toTarget: center };
   }
 
@@ -501,7 +558,7 @@ async function main() {
   // 深さが浅いほど全体を見る距離に近づけ、深いほど寄る（根からの道の一部も見える）。
   function singleNodeDistance(node) {
     const t = maxDepth > 0 ? node.depth / maxDepth : 0;
-    const far = overviewDist * 0.55;
+    const far = overviewDist() * 0.55;
     const close = R * 3.2;
     return far * (1 - t) + close * t;
   }
@@ -518,7 +575,7 @@ async function main() {
       return;
     }
     const dist = singleNodeDistance(node);
-    const dir = (node.id !== 0 && node.dir) || new THREE.Vector3(0.5, 0.35, 0.8).normalize();
+    const dir = is2D ? new THREE.Vector3(0, 0, 1) : cameraDir3D(node);
     const toPos = node.pos.clone().add(dir.clone().multiplyScalar(dist));
     animateCamera(toPos, node.pos.clone());
   }
@@ -527,7 +584,45 @@ async function main() {
     selectedId = 0;
     resetColors();
     sheetEl.hidden = true;
-    animateCamera(overviewPos, new THREE.Vector3(0, 0, 0));
+    animateCamera(overviewPos(), new THREE.Vector3(0, 0, 0));
+  }
+
+  // 2D ⇔ 3D の切り替え。描き方（InstancedMesh・線・にじみ・道のハイライト・ラベル）はそのまま、
+  // node.pos を書き換えて位置だけ作り直す。
+  function rebuildPositions() {
+    for (const n of nodes) n.pos.copy(is2D ? n.pos2d : n.pos3d);
+    for (const mesh of bucketMeshes) {
+      const ids = mesh.userData.nodeIds;
+      for (let i = 0; i < ids.length; i++) {
+        const node = nodes[ids[i]];
+        dummy.position.copy(node.pos);
+        dummy.scale.setScalar(nodeScale(node));
+        dummy.updateMatrix();
+        mesh.setMatrixAt(i, dummy.matrix);
+      }
+      mesh.instanceMatrix.needsUpdate = true;
+    }
+    rootMesh.scale.setScalar(nodeScale(root));
+    edgeNodeIds.forEach((id, i) => {
+      const node = nodes[id];
+      const p = node.parent.pos, q = node.pos;
+      edgePositions.set([p.x, p.y, p.z, q.x, q.y, q.z], i * 6);
+    });
+    edgeGeo.attributes.position.needsUpdate = true;
+    endNodes.forEach((n, i) => { glowPositions[i * 3] = n.pos.x; glowPositions[i * 3 + 1] = n.pos.y; glowPositions[i * 3 + 2] = n.pos.z; });
+    glowGeo.attributes.position.needsUpdate = true;
+    if (currentPath.length) lightPath(selectedId); // 道のハイライト・にじみの位置も作り直す
+  }
+
+  function setMode(next2D) {
+    if (next2D === is2D) return;
+    is2D = next2D;
+    saveView(is2D);
+    applyControlMode();
+    rebuildPositions();
+    btnView.textContent = is2D ? '3D' : '2D';
+    if (selectedId !== 0) selectNode(selectedId, { moveCamera: true });
+    else animateCamera(overviewPos(), new THREE.Vector3(0, 0, 0), 600);
   }
 
   // ---- 操作: クリック/タップで選択、ホバーでラベル ----
@@ -619,6 +714,8 @@ async function main() {
   });
 
   sheetClose.addEventListener('click', () => { sheetEl.hidden = true; });
+
+  btnView.addEventListener('click', () => { setMode(!is2D); });
 
   // ---- 描画ループ・リサイズ ----
   function resize() {

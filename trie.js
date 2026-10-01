@@ -110,3 +110,26 @@ export function wordsWithPrefix(root, prefix) {
   })(start);
   return out;
 }
+
+// 2D の平面放射状レイアウト（DOM にも three.js にも依らない）。
+// 各ノードに angleStart・angleSpan・angle（扇形の中心角, ラジアン）を書き込む。
+// 親の持つ扇形 [angleStart, angleStart+angleSpan) を、子孫の葉の数（leafWeight）に
+// 比例した幅で子にそのまま配り切る（先祖から受け継いだ分を超えて広げ直さない）ので、
+// 兄弟どうし・どの枝も角度が重ならない。
+export function layoutRadial(root) {
+  assign(root, 0, Math.PI * 2);
+  function assign(node, angleStart, angleSpan) {
+    node.angleStart = angleStart;
+    node.angleSpan = angleSpan;
+    node.angle = angleStart + angleSpan / 2;
+    const children = [...node.children.values()];
+    if (!children.length) return;
+    const total = children.reduce((s, c) => s + c.leafWeight, 0);
+    let a = angleStart;
+    for (const child of children) {
+      const span = (child.leafWeight / total) * angleSpan;
+      assign(child, a, span);
+      a += span;
+    }
+  }
+}

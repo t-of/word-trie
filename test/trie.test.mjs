@@ -1,7 +1,7 @@
 // トライ木の組み立てを確かめる: node test/trie.test.mjs
 import assert from 'node:assert/strict';
 import {
-  normalize, isValidWord, parseCsv, buildWordEntries, buildTrie, collectWords, wordsWithPrefix,
+  normalize, isValidWord, parseCsv, buildWordEntries, buildTrie, collectWords, wordsWithPrefix, layoutRadial,
 } from '../trie.js';
 
 let passed = 0;
@@ -98,6 +98,39 @@ check('でたらめな 1000 語: 復元とノード数', () => {
   assert.ok(nodeCount > list.length, `nodeCount=${nodeCount}`);
   assert.ok(nodeCount < list.length * 6, `nodeCount=${nodeCount}（重なりが少なすぎる）`);
   console.log(`  (でたらめ 1000 語: ノード数 ${nodeCount})`);
+});
+
+// 2D の放射状レイアウト: 兄弟の扇形が重ならず、親の扇形をちょうど埋める
+check('layoutRadial: 兄弟の角度が重ならない（2D 表示用）', () => {
+  const words = ['cat', 'car', 'card', 'care', 'cart', 'dog', 'do', 'doge', 'deer'];
+  const { entries } = buildWordEntries(words.map((word) => ({ word, meaning: '' })));
+  const { root } = buildTrie(entries);
+  layoutRadial(root);
+
+  // すべてのノードで、角度・扇形が数として出ている
+  (function walkCheckSet(node) {
+    assert.equal(typeof node.angle, 'number');
+    assert.equal(typeof node.angleSpan, 'number');
+    assert.ok(node.angleSpan >= 0);
+    for (const c of node.children.values()) walkCheckSet(c);
+  })(root);
+
+  const EPS = 1e-9;
+  (function walkCheckOverlap(node) {
+    const children = [...node.children.values()];
+    if (children.length < 2) { for (const c of children) walkCheckOverlap(c); return; }
+    // 角度順に並べ、隣り合う扇形が重ならない（前の終わりが次の始まりを超えない）ことを確かめる
+    const sorted = [...children].sort((a, b) => a.angleStart - b.angleStart);
+    for (let i = 1; i < sorted.length; i++) {
+      const prevEnd = sorted[i - 1].angleStart + sorted[i - 1].angleSpan;
+      assert.ok(prevEnd <= sorted[i].angleStart + EPS,
+        `重なっている: ${sorted[i - 1].char} [${sorted[i - 1].angleStart},${prevEnd}] と ${sorted[i].char} [${sorted[i].angleStart},...]`);
+    }
+    // 子の扇形の合計が、親から配られた扇形の幅とそろっている（はみ出さない）
+    const total = sorted.reduce((s, c) => s + c.angleSpan, 0);
+    assert.ok(Math.abs(total - node.angleSpan) < 1e-6, `合計がそろわない: ${total} vs ${node.angleSpan}`);
+    for (const c of children) walkCheckOverlap(c);
+  })(root);
 });
 
 console.log(`\n${passed} 件すべて通過`);
