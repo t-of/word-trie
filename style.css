@@ -115,9 +115,13 @@ button { font: inherit; color: inherit; }
   color: #ffb4b4;
 }
 .search__msg {
+  display: inline-block;
   margin-top: 4px;
+  padding: 3px 8px;
+  border-radius: 6px;
   font-size: 12px;
-  color: #ff9b9b;
+  color: #ffb4b4;
+  background: rgba(10, 4, 4, 0.78);
 }
 
 .hud__buttons {

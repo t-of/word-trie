@@ -10,7 +10,7 @@ if ('serviceWorker' in navigator) {
   navigator.serviceWorker.register('./sw.js');
 }
 
-const R = 1.7;          // 深さ 1 ごとの半径
+const R = 1.9;          // 深さ 1 ごとの半径（殻の間かく）
 const LABEL_COUNT = 40; // ラベルを出す球の数（+ マウスが乗った球）
 const RANDOM_TICK = 250; // ランダムな単語を 1 文字ずつ光らせる間かく（ms）
 
@@ -37,12 +37,32 @@ async function loadCsvText() {
   return res.text();
 }
 
+// 深さの色: 1 文字目は青白い恒星、奥ほど暖かい色（青白 → 白 → 黄 → 橙 → 赤）。
+// HSL を素通しで混ぜると緑（色相 0.33 あたり）を通ってしまうので、決めた色を段階的に混ぜる。
+const COLOR_STOPS = [
+  [0.00, new THREE.Color(0xbfe0ff)], // 青白い恒星
+  [0.22, new THREE.Color(0xffffff)], // 白
+  [0.48, new THREE.Color(0xffe9a8)], // 淡い黄
+  [0.72, new THREE.Color(0xffb257)], // 橙
+  [1.00, new THREE.Color(0xff5a46)], // 赤
+];
+function colorAtT(t) {
+  t = Math.max(0, Math.min(1, t));
+  for (let i = 1; i < COLOR_STOPS.length; i++) {
+    const [t0, c0] = COLOR_STOPS[i - 1];
+    const [t1, c1] = COLOR_STOPS[i];
+    if (t <= t1) {
+      const local = t1 > t0 ? (t - t0) / (t1 - t0) : 0;
+      return c0.clone().lerp(c1, local);
+    }
+  }
+  return COLOR_STOPS[COLOR_STOPS.length - 1][1].clone();
+}
 function depthColor(depth, maxDepth, isEnd) {
   const t = maxDepth > 0 ? Math.min(depth / maxDepth, 1) : 0;
-  const hue = ((0.58 - t * 0.52) % 1 + 1) % 1; // 青白 → 暖色
-  const sat = 0.6 + t * 0.25;
-  const light = (0.58 - t * 0.14) + (isEnd ? 0.16 : 0);
-  return new THREE.Color().setHSL(hue, Math.min(sat, 1), Math.min(light, 0.92));
+  const c = colorAtT(t);
+  if (isEnd) return c.clone().lerp(new THREE.Color(0xffffff), 0.35); // 単語の終わりは、はっきり明るく
+  return c.clone().multiplyScalar(0.62); // 普通の球は少し暗めに
 }
 
 function fibonacciSphere(n) {
@@ -74,28 +94,32 @@ function tiltDir(dir, angle, azimuth) {
 }
 
 // 根からの放射状の配置。深さ d の球は半径 d×R の殻の上、兄弟は親の向きのまわりに円すい状に広げる
-// （子孫の葉の数 = leafWeight に比例した角度を割り当て、重なりにくくする）
+// （子孫の葉の数 = leafWeight に比例した角度を割り当て、重なりにくくする）。
+// 子の azimuth（円すいの中の向き）は、常にその場で 0〜2π をまるごと配り直す。
+// 先祖から受け継いだ細い範囲をさらに割っていく作りだと、深いノードほど範囲が指数的に狭まり、
+// 枝が同じ方向に折り重なってしまう（2026-10 に発見）。
 function layoutTree(root) {
   root.pos = new THREE.Vector3(0, 0, 0);
   const firstChildren = [...root.children.values()];
   const dirs = fibonacciSphere(firstChildren.length);
-  firstChildren.forEach((child, i) => layoutSubtree(child, dirs[i], 1, 0, Math.PI * 2));
+  firstChildren.forEach((child, i) => layoutSubtree(child, dirs[i], 1));
 }
 
-function layoutSubtree(node, dir, depth, azimuthStart, azimuthSpan) {
+function layoutSubtree(node, dir, depth) {
   node.dir = dir;
   node.pos = dir.clone().multiplyScalar(depth * R);
   const children = [...node.children.values()];
   if (!children.length) return;
   const totalWeight = children.reduce((s, c) => s + c.leafWeight, 0);
-  const coneAngle = Math.max(0.16, 0.85 / Math.sqrt(depth + 1));
-  const shrink = 0.82; // 孫の世代がさらに重ならないよう、渡す角度の幅を少し狭める
-  let a = azimuthStart;
+  // 枝分かれが多いほど広く開く。深いほど殻が大きくなり同じ角度でも実際の間隔は広がるので、少しだけ狭める
+  const coneAngle = Math.min(1.25, Math.max(0.35, 0.3 + 0.16 * Math.sqrt(children.length))) / Math.pow(depth, 0.18);
+  const FULL = Math.PI * 2 * 0.94; // 一周ぴったりだと最初と最後が重なるので少し余らせる
+  let a = 0;
   for (const child of children) {
-    const span = (child.leafWeight / totalWeight) * azimuthSpan;
+    const span = (child.leafWeight / totalWeight) * FULL;
     const mid = a + span / 2;
     const childDir = tiltDir(dir, coneAngle, mid);
-    layoutSubtree(child, childDir, depth + 1, mid - (span * shrink) / 2, span * shrink);
+    layoutSubtree(child, childDir, depth + 1);
     a += span;
   }
 }
@@ -178,7 +202,7 @@ async function main() {
     + (removedInvalid || removedDuplicate ? `（除外: 不正 ${removedInvalid}・重複 ${removedDuplicate}）` : '');
 
   const baseColors = nodes.map((n) => depthColor(n.depth, maxDepth, n.isEnd));
-  const highlightColor = new THREE.Color(0xffffff);
+  const highlightColor = new THREE.Color(0xff53c8); // 他の深さの色と混同しない、はっきりした色
 
   // ---- three.js の下ごしらえ ----
   const scene = new THREE.Scene();
@@ -204,11 +228,14 @@ async function main() {
   // 球: 深さ・単語の終わりかどうかでまとめた InstancedMesh（色は材質ごとの固定色）。
   // instanceColor（球ごとの色の書き換え）はブラウザによって描画されない個体があったため使わない。
   // 道を光らせるのは、同じ位置に重ねる白い InstancedMesh（highlightMesh）の表示・非表示で行う。
-  const sphereGeo = new THREE.IcosahedronGeometry(1, 1);
+  const sphereGeo = new THREE.SphereGeometry(1, 16, 12);
   const dummy = new THREE.Object3D();
+  // 球の大きさは殻の間かく（R）に対してずっと小さく。深さが増すほど少し小さくし、密集しても枝の形が読めるようにする
   const sphereScale = (node) => {
-    const base = node.id === 0 ? 0.1 : Math.max(0.1, 0.26 - node.depth * 0.008);
-    return node.isEnd ? base * 1.7 : base;
+    if (node.id === 0) return R * 0.05;
+    const shrink = Math.pow(0.95, node.depth - 1);
+    const base = Math.max(R * 0.028, R * 0.1 * shrink);
+    return node.isEnd ? base * 1.55 : base * 0.82;
   };
   const bucketGroups = new Map(); // "深さ:終わりかどうか" → ノード一覧
   for (const node of nodes) {
@@ -241,7 +268,7 @@ async function main() {
 
   // 道を光らせるための、白い球を重ねる InstancedMesh（根からの道の長さぶん）
   const MAX_PATH = 80;
-  const highlightMat = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.95, blending: THREE.AdditiveBlending, depthWrite: false });
+  const highlightMat = new THREE.MeshBasicMaterial({ color: 0xff53c8, transparent: true, opacity: 0.95, blending: THREE.AdditiveBlending, depthWrite: false });
   const highlightMesh = new THREE.InstancedMesh(sphereGeo, highlightMat, MAX_PATH);
   function hideHighlightFrom(start) {
     for (let i = start; i < MAX_PATH; i++) {
@@ -288,13 +315,23 @@ async function main() {
     edgeColors.set([highlightColor.r, highlightColor.g, highlightColor.b, highlightColor.r, highlightColor.g, highlightColor.b], i * 6);
   }
 
+  // 道だけを重ねて描く、明るい LineSegments（線を太く見せたいので別に用意する）
+  const pathLinePositions = new Float32Array(MAX_PATH * 2 * 3);
+  const pathLineGeo = new THREE.BufferGeometry();
+  pathLineGeo.setAttribute('position', new THREE.BufferAttribute(pathLinePositions, 3));
+  pathLineGeo.setDrawRange(0, 0);
+  const pathLineMat = new THREE.LineBasicMaterial({ color: 0xff53c8, transparent: true, opacity: 0.95, blending: THREE.AdditiveBlending, depthWrite: false });
+  const pathLineMesh = new THREE.LineSegments(pathLineGeo, pathLineMat);
+  scene.add(pathLineMesh);
+
   // 単語の終わり: 星のようなにじみ（加算合成の Points）を 1 つにまとめる
   const glowPositions = new Float32Array(endNodes.length * 3);
   endNodes.forEach((n, i) => { glowPositions[i * 3] = n.pos.x; glowPositions[i * 3 + 1] = n.pos.y; glowPositions[i * 3 + 2] = n.pos.z; });
   const glowGeo = new THREE.BufferGeometry();
   glowGeo.setAttribute('position', new THREE.BufferAttribute(glowPositions, 3));
   const glowTex = makeGlowTexture('rgba(255,255,255,0.9)', 'rgba(255,255,255,0)');
-  const glowMat = new THREE.PointsMaterial({ map: glowTex, size: 1.1, sizeAttenuation: true, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, opacity: 0.85 });
+  // 単語の終わりはよくあるので、にじみは球より少し大きい程度にとどめる（大きすぎると密集した場所が真っ白につぶれる）
+  const glowMat = new THREE.PointsMaterial({ map: glowTex, size: R * 0.34, sizeAttenuation: true, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, opacity: 0.8 });
   scene.add(new THREE.Points(glowGeo, glowMat));
 
   // ---- ラベル（文字）: プールを使い回す ----
@@ -335,6 +372,7 @@ async function main() {
     edgeGeo.attributes.color.needsUpdate = true;
     hideHighlightFrom(0);
     highlightMesh.instanceMatrix.needsUpdate = true;
+    pathLineGeo.setDrawRange(0, 0);
   }
 
   function showSheet(node) {
@@ -366,17 +404,25 @@ async function main() {
   function lightPath(targetId) {
     for (const id of edgeNodeIds) resetEdgeColor(id);
     const path = pathToRoot(nodes[targetId]);
+    let segCount = 0;
     path.forEach((node, i) => {
       highlightEdgeColor(node.id);
       if (i >= MAX_PATH) return;
       dummy.position.copy(node.pos);
-      dummy.scale.setScalar(sphereScale(node) * 1.4);
+      dummy.scale.setScalar(sphereScale(node) * 1.3);
       dummy.updateMatrix();
       highlightMesh.setMatrixAt(i, dummy.matrix);
+      if (node.parent) {
+        const p = node.parent.pos, q = node.pos;
+        pathLinePositions.set([p.x, p.y, p.z, q.x, q.y, q.z], segCount * 6);
+        segCount++;
+      }
     });
     hideHighlightFrom(path.length);
     edgeGeo.attributes.color.needsUpdate = true;
     highlightMesh.instanceMatrix.needsUpdate = true;
+    pathLineGeo.attributes.position.needsUpdate = true;
+    pathLineGeo.setDrawRange(0, segCount * 2);
   }
 
   function animateCamera(toPos, toTarget, duration = 700) {
@@ -395,17 +441,46 @@ async function main() {
     requestAnimationFrame(step);
   }
 
-  function selectNode(id, { moveCamera = true } = {}) {
+  // 球の一覧をちょうど収める位置を計算する（中心を見て、全部が視野に入る距離まで下がる）。
+  // ランダム再生の最後（道の全体を見せたいとき）に使う。
+  function frameNodes(nodeList) {
+    const center = new THREE.Vector3();
+    for (const n of nodeList) center.add(n.pos);
+    center.divideScalar(nodeList.length);
+    let spread = R * 0.5;
+    for (const n of nodeList) spread = Math.max(spread, n.pos.distanceTo(center));
+    const fovRad = (camera.fov * Math.PI) / 180;
+    const last = nodeList[nodeList.length - 1];
+    const dist = (spread / Math.sin(fovRad / 2)) * 1.3 + R * 0.6;
+    const dir = (last && last.id !== 0 && last.dir) || new THREE.Vector3(0.5, 0.35, 0.8).normalize();
+    const toPos = center.clone().add(dir.clone().multiplyScalar(dist));
+    return { toPos, toTarget: center };
+  }
+
+  // 1 球だけを選んだときの距離。根に近い（浅い）球はそもそも周りが詰まっているので、
+  // 深さが浅いほど全体を見る距離に近づけ、深いほど寄る（根からの道の一部も見える）。
+  function singleNodeDistance(node) {
+    const t = maxDepth > 0 ? node.depth / maxDepth : 0;
+    const far = overviewDist * 0.55;
+    const close = R * 3.2;
+    return far * (1 - t) + close * t;
+  }
+
+  function selectNode(id, { moveCamera = true, frameWhole = false } = {}) {
     selectedId = id;
     lightPath(id);
     showSheet(nodes[id]);
-    if (moveCamera) {
-      const node = nodes[id];
-      const dist = Math.max(2, node.depth * R * 0.4 + 1.5);
-      const dir = node.id === 0 ? new THREE.Vector3(0.5, 0.35, 0.8).normalize() : node.dir;
-      const toPos = node.pos.clone().add(dir.clone().multiplyScalar(dist));
-      animateCamera(toPos, node.pos.clone());
+    if (!moveCamera) return;
+    const node = nodes[id];
+    if (frameWhole) {
+      const { toPos, toTarget } = frameNodes(pathToRoot(node));
+      animateCamera(toPos, toTarget);
+      return;
     }
+    const dist = singleNodeDistance(node);
+    const dir = (node.id !== 0 && node.dir) || new THREE.Vector3(0.5, 0.35, 0.8).normalize();
+    const toPos = node.pos.clone().add(dir.clone().multiplyScalar(dist));
+    animateCamera(toPos, node.pos.clone());
   }
 
   function goOverview() {
@@ -489,7 +564,7 @@ async function main() {
     const step = () => {
       i++;
       const isLast = i >= path.length;
-      selectNode(path[i - 1].id, { moveCamera: isLast });
+      selectNode(path[i - 1].id, { moveCamera: isLast, frameWhole: isLast });
       if (!isLast) randomTimer = setTimeout(step, RANDOM_TICK);
     };
     step();
