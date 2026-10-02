@@ -613,7 +613,7 @@ async function main() {
     edgeMesh.visible = !sun;
     pathLineMesh.visible = !sun;
     highlightMesh.visible = !sun;
-    glowPoints.visible = !sun;
+    glowPoints.visible = !sun && mode !== 'cube'; // 立方は球が小さく、にじみが球より大きく白くつぶれるので出さない
   }
   updateVisibility();
 
