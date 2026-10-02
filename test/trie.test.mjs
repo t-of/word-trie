@@ -2,6 +2,7 @@
 import assert from 'node:assert/strict';
 import {
   normalize, isValidWord, parseCsv, buildWordEntries, buildTrie, collectWords, wordsWithPrefix, layoutRadial, layoutGrid, layoutGlobe,
+  layoutCube, CUBE_DIRS, CUBE_R,
 } from '../trie.js';
 
 let passed = 0;
@@ -187,6 +188,56 @@ check('layoutGlobe: マスが重ならず、緯度・経度を交互に割る', 
       for (const k of ks) assert.ok(k[os] === n[os] && k[ow] === n[ow], '割らない向きの幅が親と違う');
     }
     ks.forEach(walk);
+  })(root);
+});
+
+// 立方レイアウト: 子の位置は親の中心 + 方向×一辺/3、同じ文字はいつも同じ向き、
+// 兄弟の部分木を囲む立方体は重ならない（CUBE_R の幾何級数が収束する範囲に収まる）
+check('layoutCube: 親の中心からの向き・大きさが正しく、兄弟の部分木が重ならない', () => {
+  const words = ['cat', 'car', 'card', 'dog', 'do', 'ant', 'ark', 'bee'];
+  const { entries } = buildWordEntries(words.map((word) => ({ word, meaning: '' })));
+  const { root } = buildTrie(entries);
+  layoutCube(root);
+
+  // 子の位置 = 親の中心 + 方向×(親の一辺/3)、子の一辺 = 親の一辺×CUBE_R
+  (function walk(node) {
+    for (const [ch, child] of node.children) {
+      const idx = ch.charCodeAt(0) - 97;
+      const [dx, dy, dz] = CUBE_DIRS[idx];
+      const step = node.cubeSize / 3;
+      assert.ok(Math.abs(child.cubeX - (node.cubeX + dx * step)) < 1e-9);
+      assert.ok(Math.abs(child.cubeY - (node.cubeY + dy * step)) < 1e-9);
+      assert.ok(Math.abs(child.cubeZ - (node.cubeZ + dz * step)) < 1e-9);
+      assert.ok(Math.abs(child.cubeSize - node.cubeSize * CUBE_R) < 1e-9);
+      walk(child);
+    }
+  })(root);
+
+  // 同じ文字はいつも同じ向き: 'a' の子は深さによらず常に CUBE_DIRS[0] 方向
+  const aDir = CUBE_DIRS[0];
+  (function collectA(node) {
+    const a = node.children.get('a');
+    if (a) {
+      const step = node.cubeSize / 3;
+      assert.ok(Math.abs(a.cubeX - (node.cubeX + aDir[0] * step)) < 1e-9);
+      collectA(a);
+    }
+    for (const child of node.children.values()) collectA(child);
+  })(root);
+
+  // 兄弟の部分木を囲む立方体が重ならない: どの 2 つの子も、互いの「極限まで広がった半径」
+  // （一辺/3 × CUBE_R/(1−CUBE_R)、ponytail コメントの式）の和より中心間の距離が大きい
+  const reach = (size) => size / (3 * (1 - CUBE_R));
+  (function walk2(node) {
+    const children = [...node.children.values()];
+    for (let i = 0; i < children.length; i++) {
+      for (let j = i + 1; j < children.length; j++) {
+        const a = children[i], b = children[j];
+        const d = Math.hypot(a.cubeX - b.cubeX, a.cubeY - b.cubeY, a.cubeZ - b.cubeZ);
+        assert.ok(d >= reach(a.cubeSize) + reach(b.cubeSize), '兄弟の部分木が重なりうる');
+      }
+    }
+    for (const c of children) walk2(c);
   })(root);
 });
 

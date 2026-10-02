@@ -181,3 +181,40 @@ export function layoutGlobe(root) {
     }
   }
 }
+
+// 入れ子の立方体レイアウト（DOM にも three.js にも依らない）。親の立方体を 3×3×3 に分け、
+// 中心に自分、周りの 26 マス（= 3^3 − 1）に子を置く。向きは {-1,0,1}^3 から (0,0,0) を除いた
+// 26 方向を x,y,z の辞書順に並べたもの（CUBE_DIRS）から、文字 a〜z の番号で選ぶ（同じ文字はいつも同じ向き）。
+export const CUBE_DIRS = (() => {
+  const dirs = [];
+  for (const x of [-1, 0, 1]) for (const y of [-1, 0, 1]) for (const z of [-1, 0, 1]) {
+    if (x || y || z) dirs.push([x, y, z]);
+  }
+  return dirs;
+})();
+
+// 子の一辺 = 親の一辺 × CUBE_R。隣のマス（間隔 = 親の一辺/3）と重ならないための十分条件:
+// 部分木全体の、ある軸方向への伸び（同じ向きの子を再帰的にたどった極限）は
+// Σ[k=1..∞] 親の一辺 × CUBE_R^k / 3 = 親の一辺/3 × CUBE_R/(1−CUBE_R) に収束する。
+// これがマス半分の幅（親の一辺/6）を超えないためには CUBE_R ≤ 1/3 が必要（等号で一致、実際の木は
+// 有限の深さなのでさらに余裕がある）。0.3 はこれより少し小さく、隙間が目で見てわかる値。
+export const CUBE_R = 0.3;
+
+export function layoutCube(root) {
+  root.cubeX = 0; root.cubeY = 0; root.cubeZ = 0;
+  root.cubeSize = 1; // 一辺の長さ（根の一辺を 1 とした比率）。world 単位への変換は呼び出し側で行う
+  root.cubeStep = root.cubeSize / 3; // 自分の子が置かれる間隔（球の大きさの目安に使う）
+  (function walk(node) {
+    for (const [ch, child] of node.children) {
+      const idx = ch.charCodeAt(0) - 97; // 'a' → 0 ... 'z' → 25
+      const [dx, dy, dz] = CUBE_DIRS[idx];
+      const step = node.cubeSize / 3;
+      child.cubeX = node.cubeX + dx * step;
+      child.cubeY = node.cubeY + dy * step;
+      child.cubeZ = node.cubeZ + dz * step;
+      child.cubeSize = node.cubeSize * CUBE_R;
+      child.cubeStep = child.cubeSize / 3;
+      walk(child);
+    }
+  })(root);
+}

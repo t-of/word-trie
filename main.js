@@ -2,7 +2,7 @@
 // トライ木の組み立て（整形・構築）は trie.js にまとめてあり、node からも同じものを検査できる（test/trie.test.mjs）。
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { parseCsv, buildWordEntries, buildTrie, pathWord, wordsWithPrefix, normalize, layoutRadial, layoutGrid, layoutGlobe } from './trie.js';
+import { parseCsv, buildWordEntries, buildTrie, pathWord, wordsWithPrefix, normalize, layoutRadial, layoutGrid, layoutGlobe, layoutCube } from './trie.js';
 // サンバースト（輪）の角度は 2D と同じ layoutRadial をそのまま使う。重ならない・単語数に比例する
 // ことは test/trie.test.mjs の「layoutRadial」の検査で既に見ている（新しい関数は作らない）。
 
@@ -14,10 +14,11 @@ if ('serviceWorker' in navigator) {
 
 // localStorage はほかのアプリと共有される。キーは 'word-trie.' で始める（RULES.md §3）
 const STORE = 'word-trie.';
-// 表示モード: '3d' | '2d' | 'grid' | 'globe'。ボタンを押すたびに 3d → 2d → grid → globe → 3d と回す
-const MODES = ['3d', '2d', 'grid', 'globe', 'sunburst'];
-const NEXT_MODE = { '3d': '2d', '2d': 'grid', grid: 'globe', globe: 'sunburst', sunburst: '3d' };
-const MODE_LABEL = { '3d': '3D', '2d': '2D', grid: '格子', globe: '地球', sunburst: '輪' };
+// 表示モード: '3d' | '2d' | 'grid' | 'globe' | 'sunburst' | 'cube'。
+// ボタンを押すたびに 3d → 2d → grid → globe → sunburst → cube → 3d と回す
+const MODES = ['3d', '2d', 'grid', 'globe', 'sunburst', 'cube'];
+const NEXT_MODE = { '3d': '2d', '2d': 'grid', grid: 'globe', globe: 'sunburst', sunburst: 'cube', cube: '3d' };
+const MODE_LABEL = { '3d': '3D', '2d': '2D', grid: '格子', globe: '地球', sunburst: '輪', cube: '立方' };
 function loadView() {
   try {
     const v = localStorage.getItem(STORE + 'view');
@@ -236,12 +237,25 @@ function layoutTreeSunburst(root) {
   })(root);
 }
 
+// 入れ子立方体レイアウト。3×3×3 に分けて重ねる比率（重ならないこと）は trie.js の
+// layoutCube（DOM に依らない。test/trie.test.mjs で検査）に任せ、ここでは一辺の長さ（CUBE_S0）を
+// 掛けて world 座標に変換するだけ。node.cubeStep（自分の子の間隔）は球の大きさにも使う。
+const CUBE_S0 = R * 3; // 全体の一辺。他のモードの広がり（R の数倍）に合わせた大きさ
+function layoutTreeCube(root) {
+  layoutCube(root);
+  (function walk(node) {
+    node.posCube = new THREE.Vector3(node.cubeX * CUBE_S0, node.cubeY * CUBE_S0, node.cubeZ * CUBE_S0);
+    for (const child of node.children.values()) walk(child);
+  })(root);
+}
+
 // 今の表示モードでのノードの位置
 function posForMode(node, mode) {
   if (mode === '2d') return node.pos2d;
   if (mode === 'grid') return node.posGrid;
   if (mode === 'globe') return node.posGlobe;
   if (mode === 'sunburst') return node.posSunburst;
+  if (mode === 'cube') return node.posCube;
   return node.pos3d;
 }
 
@@ -318,6 +332,7 @@ async function main() {
   layoutTreeGrid(root); // 目盛りの配り方（重ならないこと）は trie.js の layoutGrid、node から検査できる
   layoutTreeGlobe(root); // マスの配り方（重ならないこと）は trie.js の layoutGlobe
   layoutTreeSunburst(root); // 角度は 2D と同じ layoutRadial（test/trie.test.mjs で検査済み）
+  layoutTreeCube(root); // 入れ子の比率（重ならないこと）は trie.js の layoutCube
   const nodes = flattenNodes(root, nodeCount);
   const endNodes = nodes.filter((n) => n.isEnd);
   let maxDepth = 0;
@@ -345,7 +360,7 @@ async function main() {
 
   // 3D / 2D / 格子 / サンバースト。選んだ方は localStorage に覚える。node.pos は今の表示モードの座標（切り替え時に書き換える）
   let mode = loadView();
-  const isTopDown = () => mode === '2d' || mode === 'grid' || mode === 'sunburst'; // 2D・格子・サンバーストは真上から見る（3D・地球は回せる）
+  const isTopDown = () => mode === '2d' || mode === 'grid' || mode === 'sunburst'; // 2D・格子・サンバーストは真上から見る（3D・地球・立方は回せる）
   for (const n of nodes) n.pos = posForMode(n, mode).clone();
   btnView.textContent = MODE_LABEL[NEXT_MODE[mode]]; // ボタンには切り替え先のモードを出す
 
@@ -367,6 +382,9 @@ async function main() {
   // 地球は、一番外の殻がちょうど画面に収まる距離から、3D と同じ向きで見る
   const overviewDistGlobe = Math.max(8, ((globeR + maxDepth * GLOBE_STEP) / Math.sin(fovRad3D / 2)) * 1.1);
   const overviewPosGlobe = overviewPos3D.clone().setLength(overviewDistGlobe);
+  // 立方は、全体の広がり（一辺の半分ほど、CUBE_R の幾何級数の収束先）がちょうど画面に収まる距離から、3D と同じ向きで見る
+  const overviewDistCube = Math.max(8, ((CUBE_S0 * 0.5) / Math.sin(fovRad3D / 2)) * 1.1);
+  const overviewPosCube = overviewPos3D.clone().setLength(overviewDistCube);
   // 2D・格子は真上から見る。実際の x, y の広がりに余白 8% を足した分が、画面の縦・横どちらにも
   // 収まる距離まで離れる（アスペクト比に応じて、縦・横のきつい方に合わせる）
   const MARGIN_2D = 1.08;
@@ -382,8 +400,8 @@ async function main() {
   const overviewPos2D = () => new THREE.Vector3(0, 0, overviewDist2D());
   const overviewPosGrid = () => new THREE.Vector3(0, 0, overviewDistGrid());
   const overviewPosSunburst = () => new THREE.Vector3(0, 0, overviewDistSunburst());
-  const overviewPos = () => (mode === '2d' ? overviewPos2D() : mode === 'grid' ? overviewPosGrid() : mode === 'globe' ? overviewPosGlobe : mode === 'sunburst' ? overviewPosSunburst() : overviewPos3D);
-  const overviewDist = () => (mode === '2d' ? overviewDist2D() : mode === 'grid' ? overviewDistGrid() : mode === 'globe' ? overviewDistGlobe : mode === 'sunburst' ? overviewDistSunburst() : overviewDist3D);
+  const overviewPos = () => (mode === '2d' ? overviewPos2D() : mode === 'grid' ? overviewPosGrid() : mode === 'globe' ? overviewPosGlobe : mode === 'sunburst' ? overviewPosSunburst() : mode === 'cube' ? overviewPosCube : overviewPos3D);
+  const overviewDist = () => (mode === '2d' ? overviewDist2D() : mode === 'grid' ? overviewDistGrid() : mode === 'globe' ? overviewDistGlobe : mode === 'sunburst' ? overviewDistSunburst() : mode === 'cube' ? overviewDistCube : overviewDist3D);
   // #scene の大きさは CSS で決まっていて、canvas を作る前でも読める
   camera.aspect = sceneEl.clientWidth / sceneEl.clientHeight || 1;
   camera.updateProjectionMatrix();
@@ -397,7 +415,7 @@ async function main() {
   controls.enableDamping = true;
   controls.dampingFactor = 0.08;
   controls.minDistance = 1;
-  controls.maxDistance = Math.max(overviewDist3D, overviewDist2D(), overviewDistGrid(), overviewDistGlobe, overviewDistSunburst()) * 1.5;
+  controls.maxDistance = Math.max(overviewDist3D, overviewDist2D(), overviewDistGrid(), overviewDistGlobe, overviewDistSunburst(), overviewDistCube) * 1.5;
   controls.target.set(0, 0, 0);
   // 2D・格子の間は回転を切り、1 本指/左ドラッグをパンにする（拡大はホイール・ピンチのまま）。
   // 画角も望遠にして、真上から見た図に近づける
@@ -420,8 +438,11 @@ async function main() {
   // 道を光らせるのは、同じ位置に重ねる白い InstancedMesh（highlightMesh）の表示・非表示で行う。
   const sphereGeo = new THREE.SphereGeometry(1, 16, 12);
   const dummy = new THREE.Object3D();
-  // 球の大きさはすべて同じ（深さ・単語の終わりで変えない）。2D・格子は円の半径を球が重ならない大きさに広げる
-  const nodeScale = () => (isTopDown() ? NODE_R_2D : R * 0.06);
+  // 球の大きさはすべて同じ（深さ・単語の終わりで変えない）。2D・格子は円の半径を球が重ならない大きさに広げる。
+  // 立方は深さごとにマスの間隔（node.cubeStep）がどんどん縮むので、それに比例させる（常に間隔の 0.28 倍、
+  // 間隔の半分＝0.5 未満なら隣のマスの球とぶつからない）
+  const CUBE_NODE_FACTOR = 0.28;
+  const nodeScale = (node) => (mode === 'cube' ? node.cubeStep * CUBE_S0 * CUBE_NODE_FACTOR : isTopDown() ? NODE_R_2D : R * 0.06);
   const bucketGroups = new Map(); // "深さ:終わりかどうか" → ノード一覧
   for (const node of nodes) {
     if (node.id === 0) continue;
@@ -761,7 +782,7 @@ async function main() {
       const half = farHalf * (1 - t) + closeHalf * t;
       return half / Math.tan(fovRad2D / 2);
     }
-    const far = (mode === 'globe' ? overviewDistGlobe : overviewDist3D) * 0.55;
+    const far = (mode === 'globe' ? overviewDistGlobe : mode === 'cube' ? overviewDistCube : overviewDist3D) * 0.55;
     const close = R * 3.2;
     return far * (1 - t) + close * t;
   }
