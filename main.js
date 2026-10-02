@@ -14,11 +14,12 @@ if ('serviceWorker' in navigator) {
 
 // localStorage はほかのアプリと共有される。キーは 'word-trie.' で始める（RULES.md §3）
 const STORE = 'word-trie.';
-// 表示モード: '3d' | '2d' | 'grid' | 'globe' | 'sunburst' | 'cube'。
-// ボタンを押すたびに 3d → 2d → grid → globe → sunburst → cube → 3d と回す
-const MODES = ['3d', '2d', 'grid', 'globe', 'sunburst', 'cube'];
-const NEXT_MODE = { '3d': '2d', '2d': 'grid', grid: 'globe', globe: 'sunburst', sunburst: 'cube', cube: '3d' };
-const MODE_LABEL = { '3d': '3D', '2d': '2D', grid: '格子', globe: '地球', sunburst: '輪', cube: '立方' };
+// 表示モード: '3d' | '2d' | 'grid' | 'globe' | 'sunburst' | 'cube' | 'cubeball'（立方と同じ配置で、立方体に収まる球）。
+// ボタンを押すたびに 3d → 2d → grid → globe → sunburst → cube → cubeball → 3d と回す
+const MODES = ['3d', '2d', 'grid', 'globe', 'sunburst', 'cube', 'cubeball'];
+const NEXT_MODE = { '3d': '2d', '2d': 'grid', grid: 'globe', globe: 'sunburst', sunburst: 'cube', cube: 'cubeball', cubeball: '3d' };
+const MODE_LABEL = { '3d': '3D', '2d': '2D', grid: '格子', globe: '地球', sunburst: '輪', cube: '立方', cubeball: '立方球' };
+const isCubeMode = (m) => m === 'cube' || m === 'cubeball'; // 位置・大きさ・カメラは立方と共通
 function loadView() {
   try {
     const v = localStorage.getItem(STORE + 'view');
@@ -255,7 +256,7 @@ function posForMode(node, mode) {
   if (mode === 'grid') return node.posGrid;
   if (mode === 'globe') return node.posGlobe;
   if (mode === 'sunburst') return node.posSunburst;
-  if (mode === 'cube') return node.posCube;
+  if (isCubeMode(mode)) return node.posCube;
   return node.pos3d;
 }
 
@@ -400,8 +401,8 @@ async function main() {
   const overviewPos2D = () => new THREE.Vector3(0, 0, overviewDist2D());
   const overviewPosGrid = () => new THREE.Vector3(0, 0, overviewDistGrid());
   const overviewPosSunburst = () => new THREE.Vector3(0, 0, overviewDistSunburst());
-  const overviewPos = () => (mode === '2d' ? overviewPos2D() : mode === 'grid' ? overviewPosGrid() : mode === 'globe' ? overviewPosGlobe : mode === 'sunburst' ? overviewPosSunburst() : mode === 'cube' ? overviewPosCube : overviewPos3D);
-  const overviewDist = () => (mode === '2d' ? overviewDist2D() : mode === 'grid' ? overviewDistGrid() : mode === 'globe' ? overviewDistGlobe : mode === 'sunburst' ? overviewDistSunburst() : mode === 'cube' ? overviewDistCube : overviewDist3D);
+  const overviewPos = () => (mode === '2d' ? overviewPos2D() : mode === 'grid' ? overviewPosGrid() : mode === 'globe' ? overviewPosGlobe : mode === 'sunburst' ? overviewPosSunburst() : isCubeMode(mode) ? overviewPosCube : overviewPos3D);
+  const overviewDist = () => (mode === '2d' ? overviewDist2D() : mode === 'grid' ? overviewDistGrid() : mode === 'globe' ? overviewDistGlobe : mode === 'sunburst' ? overviewDistSunburst() : isCubeMode(mode) ? overviewDistCube : overviewDist3D);
   // #scene の大きさは CSS で決まっていて、canvas を作る前でも読める
   camera.aspect = sceneEl.clientWidth / sceneEl.clientHeight || 1;
   camera.updateProjectionMatrix();
@@ -443,7 +444,7 @@ async function main() {
   // （一辺の半分が間隔の 0.28 倍。0.5 未満なら隣のマスの立方体とぶつからない）
   const boxGeo = new THREE.BoxGeometry(2, 2, 2); // 一辺 2 ＝ 半径 1 の球と同じ scale で扱える
   const CUBE_NODE_FACTOR = 0.28;
-  const nodeScale = (node) => (mode === 'cube' ? node.cubeStep * CUBE_S0 * CUBE_NODE_FACTOR : isTopDown() ? NODE_R_2D : R * 0.06);
+  const nodeScale = (node) => (isCubeMode(mode) ? node.cubeStep * CUBE_S0 * CUBE_NODE_FACTOR : isTopDown() ? NODE_R_2D : R * 0.06);
   const bucketGroups = new Map(); // "深さ:終わりかどうか" → ノード一覧
   for (const node of nodes) {
     if (node.id === 0) continue;
@@ -613,7 +614,7 @@ async function main() {
     edgeMesh.visible = !sun;
     pathLineMesh.visible = !sun;
     highlightMesh.visible = !sun;
-    glowPoints.visible = !sun && mode !== 'cube'; // 立方はにじみが立方体より大きく白くつぶれるので出さない
+    glowPoints.visible = !sun && !isCubeMode(mode); // 立方はにじみがノードより大きく白くつぶれるので出さない
     const geo = mode === 'cube' ? boxGeo : sphereGeo;
     for (const mesh of [...bucketMeshes, rootMesh, highlightMesh]) mesh.geometry = geo;
   }
@@ -785,7 +786,7 @@ async function main() {
       const half = farHalf * (1 - t) + closeHalf * t;
       return half / Math.tan(fovRad2D / 2);
     }
-    const far = (mode === 'globe' ? overviewDistGlobe : mode === 'cube' ? overviewDistCube : overviewDist3D) * 0.55;
+    const far = (mode === 'globe' ? overviewDistGlobe : isCubeMode(mode) ? overviewDistCube : overviewDist3D) * 0.55;
     const close = R * 3.2;
     return far * (1 - t) + close * t;
   }
