@@ -3,6 +3,8 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { parseCsv, buildWordEntries, buildTrie, pathWord, wordsWithPrefix, normalize, layoutRadial, layoutGrid, layoutGlobe } from './trie.js';
+// サンバースト（輪）の角度は 2D と同じ layoutRadial をそのまま使う。重ならない・単語数に比例する
+// ことは test/trie.test.mjs の「layoutRadial」の検査で既に見ている（新しい関数は作らない）。
 
 WebAppKit.init({ title: 'word-trie', text: '英単語帳を宇宙に浮かぶ文字の木として 3D で見る' });
 
@@ -13,9 +15,9 @@ if ('serviceWorker' in navigator) {
 // localStorage はほかのアプリと共有される。キーは 'word-trie.' で始める（RULES.md §3）
 const STORE = 'word-trie.';
 // 表示モード: '3d' | '2d' | 'grid' | 'globe'。ボタンを押すたびに 3d → 2d → grid → globe → 3d と回す
-const MODES = ['3d', '2d', 'grid', 'globe'];
-const NEXT_MODE = { '3d': '2d', '2d': 'grid', grid: 'globe', globe: '3d' };
-const MODE_LABEL = { '3d': '3D', '2d': '2D', grid: '格子', globe: '地球' };
+const MODES = ['3d', '2d', 'grid', 'globe', 'sunburst'];
+const NEXT_MODE = { '3d': '2d', '2d': 'grid', grid: 'globe', globe: 'sunburst', sunburst: '3d' };
+const MODE_LABEL = { '3d': '3D', '2d': '2D', grid: '格子', globe: '地球', sunburst: '輪' };
 function loadView() {
   try {
     const v = localStorage.getItem(STORE + 'view');
@@ -207,9 +209,40 @@ function layoutTreeGlobe(root) {
   })(root);
 }
 
+// サンバースト（輪）レイアウト。角度の配り方は trie.js の layoutRadial（2D と同じ、重ならない・
+// 単語数に比例）に任せ、ここでは深さ 1 ごとに輪を 1 本広げて弧の内側・外側の半径を決め、
+// three.js の RingGeometry の向き（+x から反時計回り）に角度を読み替える。
+// node.posSunburst は弧の中心（ラベル・カメラ移動は他のモードと同じく node.pos をそのまま使えるように）。
+const SUN_R0 = R * 0.6;  // 中心の穴の半径
+const SUN_RW = R * 0.55; // 輪 1 本の太さ（半径方向）
+function layoutTreeSunburst(root) {
+  layoutRadial(root);
+  root.posSunburst = new THREE.Vector3(0, 0, 0);
+  (function walk(node) {
+    for (const child of node.children.values()) {
+      const innerR = SUN_R0 + (child.depth - 1) * SUN_RW;
+      const outerR = innerR + SUN_RW;
+      child.innerR = innerR;
+      child.outerR = outerR;
+      // layoutRadial の角度は 2D と同じ向き（12 時から時計回りに a→z）。RingGeometry は
+      // +x から反時計回りに角度を取るので、向きが逆になる分だけ開始角をずらす（2D の a = π/2 − angle と同じ変換）。
+      child.thetaStartRing = Math.PI / 2 - (child.angleStart + child.angleSpan);
+      child.thetaLenRing = child.angleSpan;
+      const mid = Math.PI / 2 - child.angle;
+      const rMid = (innerR + outerR) / 2;
+      child.posSunburst = new THREE.Vector3(Math.cos(mid) * rMid, Math.sin(mid) * rMid, 0);
+      walk(child);
+    }
+  })(root);
+}
+
 // 今の表示モードでのノードの位置
 function posForMode(node, mode) {
-  return mode === '2d' ? node.pos2d : mode === 'grid' ? node.posGrid : mode === 'globe' ? node.posGlobe : node.pos3d;
+  if (mode === '2d') return node.pos2d;
+  if (mode === 'grid') return node.posGrid;
+  if (mode === 'globe') return node.posGlobe;
+  if (mode === 'sunburst') return node.posSunburst;
+  return node.pos3d;
 }
 
 function flattenNodes(root, nodeCount) {
@@ -284,6 +317,7 @@ async function main() {
   layoutTree2D(root); // 角度の配り方（重ならないこと）は trie.js の layoutRadial、node から検査できる
   layoutTreeGrid(root); // 目盛りの配り方（重ならないこと）は trie.js の layoutGrid、node から検査できる
   layoutTreeGlobe(root); // マスの配り方（重ならないこと）は trie.js の layoutGlobe
+  layoutTreeSunburst(root); // 角度は 2D と同じ layoutRadial（test/trie.test.mjs で検査済み）
   const nodes = flattenNodes(root, nodeCount);
   const endNodes = nodes.filter((n) => n.isEnd);
   let maxDepth = 0;
@@ -306,10 +340,12 @@ async function main() {
   const bound2DHalfY = Math.max(R, percentile(nodes.map((n) => Math.abs(n.pos2d.y)), 0.94));
   const boundGridHalfX = Math.max(R, percentile(nodes.map((n) => Math.abs(n.posGrid.x)), 0.94));
   const boundGridHalfY = Math.max(R, percentile(nodes.map((n) => Math.abs(n.posGrid.y)), 0.94));
+  // サンバーストはきれいな円なので、外側の輪の半径がそのまま広がり
+  const sunburstOuterR = SUN_R0 + maxDepth * SUN_RW;
 
-  // 3D / 2D / 格子。選んだ方は localStorage に覚える。node.pos は今の表示モードの座標（切り替え時に書き換える）
+  // 3D / 2D / 格子 / サンバースト。選んだ方は localStorage に覚える。node.pos は今の表示モードの座標（切り替え時に書き換える）
   let mode = loadView();
-  const isTopDown = () => mode === '2d' || mode === 'grid'; // 2D・格子は真上から見る（3D・地球は回せる）
+  const isTopDown = () => mode === '2d' || mode === 'grid' || mode === 'sunburst'; // 2D・格子・サンバーストは真上から見る（3D・地球は回せる）
   for (const n of nodes) n.pos = posForMode(n, mode).clone();
   btnView.textContent = MODE_LABEL[NEXT_MODE[mode]]; // ボタンには切り替え先のモードを出す
 
@@ -342,10 +378,12 @@ async function main() {
   }
   const overviewDist2D = () => overviewDistFor(bound2DHalfX, bound2DHalfY);
   const overviewDistGrid = () => overviewDistFor(boundGridHalfX, boundGridHalfY);
+  const overviewDistSunburst = () => overviewDistFor(sunburstOuterR, sunburstOuterR);
   const overviewPos2D = () => new THREE.Vector3(0, 0, overviewDist2D());
   const overviewPosGrid = () => new THREE.Vector3(0, 0, overviewDistGrid());
-  const overviewPos = () => (mode === '2d' ? overviewPos2D() : mode === 'grid' ? overviewPosGrid() : mode === 'globe' ? overviewPosGlobe : overviewPos3D);
-  const overviewDist = () => (mode === '2d' ? overviewDist2D() : mode === 'grid' ? overviewDistGrid() : mode === 'globe' ? overviewDistGlobe : overviewDist3D);
+  const overviewPosSunburst = () => new THREE.Vector3(0, 0, overviewDistSunburst());
+  const overviewPos = () => (mode === '2d' ? overviewPos2D() : mode === 'grid' ? overviewPosGrid() : mode === 'globe' ? overviewPosGlobe : mode === 'sunburst' ? overviewPosSunburst() : overviewPos3D);
+  const overviewDist = () => (mode === '2d' ? overviewDist2D() : mode === 'grid' ? overviewDistGrid() : mode === 'globe' ? overviewDistGlobe : mode === 'sunburst' ? overviewDistSunburst() : overviewDist3D);
   // #scene の大きさは CSS で決まっていて、canvas を作る前でも読める
   camera.aspect = sceneEl.clientWidth / sceneEl.clientHeight || 1;
   camera.updateProjectionMatrix();
@@ -359,7 +397,7 @@ async function main() {
   controls.enableDamping = true;
   controls.dampingFactor = 0.08;
   controls.minDistance = 1;
-  controls.maxDistance = Math.max(overviewDist3D, overviewDist2D(), overviewDistGrid(), overviewDistGlobe) * 1.5;
+  controls.maxDistance = Math.max(overviewDist3D, overviewDist2D(), overviewDistGrid(), overviewDistGlobe, overviewDistSunburst()) * 1.5;
   controls.target.set(0, 0, 0);
   // 2D・格子の間は回転を切り、1 本指/左ドラッグをパンにする（拡大はホイール・ピンチのまま）。
   // 画角も望遠にして、真上から見た図に近づける
@@ -493,7 +531,69 @@ async function main() {
   const glowTex = makeGlowTexture('rgba(255,255,255,0.9)', 'rgba(255,255,255,0)');
   // 単語の終わりはよくあるので、にじみは球より少し大きい程度にとどめる（大きすぎると密集した場所が真っ白につぶれる）
   const glowMat = new THREE.PointsMaterial({ map: glowTex, size: R * 0.34, sizeAttenuation: true, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, opacity: 0.8 });
-  scene.add(new THREE.Points(glowGeo, glowMat));
+  const glowPoints = new THREE.Points(glowGeo, glowMat);
+  scene.add(glowPoints);
+
+  // ---- サンバースト: 輪の弧（1 文字 1 つの扇形）。開始・終わりの角度が弧ごとに違うので
+  // InstancedMesh（アフィン変換だけ）には収まらない。RingGeometry で弧ごとに三角形を作り、
+  // 1 つの BufferGeometry にまとめる（球以外の既存のメッシュと同じく、描画は 1 回ですむように）。
+  // どの三角形がどのノードのものかは arcOwnerByTriangle（三角形の番号 → node.id）で覚えておき、
+  // ピック・ハイライトに使う。弧の位置そのものは固定（モードを切り替えても動かないので作り直さない）。
+  const arcOwnerByTriangle = [];
+  const arcPositions = [];
+  const arcColors = [];
+  for (const node of nodes) {
+    if (node.id === 0) continue;
+    const segs = Math.max(3, Math.min(32, Math.round((node.angleSpan / (Math.PI * 2)) * 64)));
+    const gap = Math.min(node.angleSpan * 0.08, 0.01); // 弧どうしの細いすき間
+    const geo = new THREE.RingGeometry(
+      node.innerR, node.outerR - SUN_RW * 0.04, segs, 1,
+      node.thetaStartRing + gap / 2, Math.max(node.thetaLenRing - gap, 0.0001),
+    );
+    const pos = geo.attributes.position.array;
+    const idx = geo.index.array;
+    const color = baseColors[node.id];
+    node.arcVertStart = arcColors.length / 3;
+    for (let i = 0; i < idx.length; i++) {
+      const v = idx[i] * 3;
+      arcPositions.push(pos[v], pos[v + 1], pos[v + 2]);
+      arcColors.push(color.r, color.g, color.b);
+      if (i % 3 === 0) arcOwnerByTriangle.push(node.id);
+    }
+    node.arcVertCount = arcColors.length / 3 - node.arcVertStart;
+    geo.dispose();
+  }
+  const arcGeo = new THREE.BufferGeometry();
+  arcGeo.setAttribute('position', new THREE.Float32BufferAttribute(arcPositions, 3));
+  arcGeo.setAttribute('color', new THREE.Float32BufferAttribute(arcColors, 3));
+  const arcMat = new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.DoubleSide });
+  const arcMesh = new THREE.Mesh(arcGeo, arcMat);
+  scene.add(arcMesh);
+
+  function setArcColor(id, color) {
+    const node = nodes[id];
+    if (node.arcVertCount == null) return;
+    const arr = arcGeo.attributes.color.array;
+    for (let v = node.arcVertStart; v < node.arcVertStart + node.arcVertCount; v++) {
+      arr[v * 3] = color.r; arr[v * 3 + 1] = color.g; arr[v * 3 + 2] = color.b;
+    }
+  }
+  function resetArcColor(id, factor = 1) {
+    setArcColor(id, factor === 1 ? baseColors[id] : baseColors[id].clone().multiplyScalar(factor));
+  }
+  function highlightArcColor(id) { setArcColor(id, highlightColor); }
+
+  function updateVisibility() {
+    const sun = mode === 'sunburst';
+    arcMesh.visible = sun;
+    for (const mesh of bucketMeshes) mesh.visible = !sun;
+    rootMesh.visible = !sun;
+    edgeMesh.visible = !sun;
+    pathLineMesh.visible = !sun;
+    highlightMesh.visible = !sun;
+    glowPoints.visible = !sun;
+  }
+  updateVisibility();
 
   // ---- ラベル（文字）: プールを使い回す ----
   // 道 → ホバー → 近い順、の優先度で置く。既に置いたラベルから 14px 以内に来るものは出さない
@@ -549,6 +649,8 @@ async function main() {
     setDimmed(false);
     for (const id of edgeNodeIds) resetEdgeColor(id);
     edgeGeo.attributes.color.needsUpdate = true;
+    for (const n of nodes) if (n.id !== 0) resetArcColor(n.id);
+    arcGeo.attributes.color.needsUpdate = true;
     hideHighlightFrom(0);
     highlightMesh.instanceMatrix.needsUpdate = true;
     pathLineGeo.setDrawRange(0, 0);
@@ -583,11 +685,13 @@ async function main() {
   function lightPath(targetId) {
     setDimmed(true);
     for (const id of edgeNodeIds) resetEdgeColor(id, DIM_FACTOR);
+    for (const n of nodes) if (n.id !== 0) resetArcColor(n.id, DIM_FACTOR);
     const path = pathToRoot(nodes[targetId]);
     currentPath = path;
     let segCount = 0;
     path.forEach((node, i) => {
       highlightEdgeColor(node.id);
+      highlightArcColor(node.id);
       if (i >= MAX_PATH) return;
       dummy.position.copy(node.pos);
       dummy.scale.setScalar(nodeScale(node) * 1.3);
@@ -601,6 +705,7 @@ async function main() {
     });
     hideHighlightFrom(path.length);
     edgeGeo.attributes.color.needsUpdate = true;
+    arcGeo.attributes.color.needsUpdate = true;
     highlightMesh.instanceMatrix.needsUpdate = true;
     pathLineGeo.attributes.position.needsUpdate = true;
     pathLineGeo.setDrawRange(0, segCount * 2);
@@ -649,8 +754,8 @@ async function main() {
     const t = maxDepth > 0 ? node.depth / maxDepth : 0;
     if (isTopDown()) {
       // 距離ではなく「画面の半分の高さ（ワールド単位）」で浅い⇔深いを補間し、そこから画角で距離を出す。
-      // 2D・格子は画角がごく狭いので、3D と同じ「距離」をそのまま流用すると寄りすぎてしまう。
-      const boundHalfY = mode === 'grid' ? boundGridHalfY : bound2DHalfY;
+      // 2D・格子・サンバーストは画角がごく狭いので、3D と同じ「距離」をそのまま流用すると寄りすぎてしまう。
+      const boundHalfY = mode === 'grid' ? boundGridHalfY : mode === 'sunburst' ? sunburstOuterR : bound2DHalfY;
       const farHalf = boundHalfY * MARGIN_2D * 0.55;
       const closeHalf = R * 1.7;
       const half = farHalf * (1 - t) + closeHalf * t;
@@ -717,6 +822,7 @@ async function main() {
     mode = next;
     saveView(mode);
     applyControlMode();
+    updateVisibility();
     rebuildPositions();
     btnView.textContent = MODE_LABEL[NEXT_MODE[mode]];
     if (selectedId !== 0) selectNode(selectedId, { moveCamera: true });
@@ -736,6 +842,12 @@ async function main() {
 
   function pickNode() {
     raycaster.setFromCamera(pointerNdc, camera);
+    if (mode === 'sunburst') {
+      const hit = raycaster.intersectObject(arcMesh)[0];
+      if (!hit || hit.faceIndex == null) return null;
+      const id = arcOwnerByTriangle[hit.faceIndex];
+      return id == null ? null : nodes[id];
+    }
     const hit = raycaster.intersectObjects(bucketMeshes)[0];
     if (!hit || hit.instanceId == null) return null;
     const id = hit.object.userData.nodeIds[hit.instanceId];
