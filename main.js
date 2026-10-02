@@ -135,15 +135,28 @@ function layoutSubtree3D(node, dir, depth) {
 }
 
 // 2D の平面放射状レイアウト。角度の配り方そのもの（重ならないこと）は trie.js の
-// layoutRadial（DOM に依らない。test/trie.test.mjs で検査）に任せ、ここでは
-// 角度 + 深さ×R を x, y 座標に変換するだけ。12 時から時計回りに a→z と並ぶよう、角度を π/2 − angle に読み替える。
+// layoutRadial（DOM に依らない。test/trie.test.mjs で検査）に任せ、ここでは角度を x, y 座標に変換する。
+// 円の半径は深さ×R を基本に、その深さで一番近い隣どうしの角度差でも球（直径 2×NODE_R_2D）が
+// 重ならない大きさまで広げる（外の円は内より必ず R 以上外）。12 時から時計回りに a→z と並ぶよう、角度を π/2 − angle に読み替える。
+const NODE_R_2D = R * 0.035;
 function layoutTree2D(root) {
   layoutRadial(root);
+  const angles = [];
+  (function collect(node) {
+    if (node.depth) (angles[node.depth] ??= []).push(node.angle);
+    for (const child of node.children.values()) collect(child);
+  })(root);
+  const radius = [0];
+  for (let d = 1; d < angles.length; d++) {
+    const a = angles[d].sort((x, y) => x - y);
+    let minGap = a.length > 1 ? a[0] + Math.PI * 2 - a[a.length - 1] : Infinity;
+    for (let i = 1; i < a.length; i++) minGap = Math.min(minGap, a[i] - a[i - 1]);
+    radius[d] = Math.max(radius[d - 1] + R, (NODE_R_2D * 2 * 1.1) / minGap);
+  }
   (function walk(node) {
     const a = Math.PI / 2 - node.angle;
-    node.pos2d = node.depth === 0
-      ? new THREE.Vector3(0, 0, 0)
-      : new THREE.Vector3(Math.cos(a) * node.depth * R, Math.sin(a) * node.depth * R, 0);
+    const r = radius[node.depth];
+    node.pos2d = new THREE.Vector3(Math.cos(a) * r, Math.sin(a) * r, 0);
     for (const child of node.children.values()) walk(child);
   })(root);
 }
@@ -306,8 +319,8 @@ async function main() {
   // 道を光らせるのは、同じ位置に重ねる白い InstancedMesh（highlightMesh）の表示・非表示で行う。
   const sphereGeo = new THREE.SphereGeometry(1, 16, 12);
   const dummy = new THREE.Object3D();
-  // 球は文字数目（深さ）が進むほど小さく。単語の終わりかどうかでは変えない。2D は外周が詰まるので 3D より少し小さく
-  const nodeScale = (node) => (is2D ? R * 0.045 : R * 0.075) * Math.max(0.3, Math.pow(0.85, node.depth));
+  // 球の大きさはすべて同じ（深さ・単語の終わりで変えない）。2D は円の半径を球が重ならない大きさに広げる（layoutTree2D）
+  const nodeScale = () => (is2D ? NODE_R_2D : R * 0.06);
   const bucketGroups = new Map(); // "深さ:終わりかどうか" → ノード一覧
   for (const node of nodes) {
     if (node.id === 0) continue;
