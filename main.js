@@ -306,20 +306,8 @@ async function main() {
   // 道を光らせるのは、同じ位置に重ねる白い InstancedMesh（highlightMesh）の表示・非表示で行う。
   const sphereGeo = new THREE.SphereGeometry(1, 16, 12);
   const dummy = new THREE.Object3D();
-  // 球の大きさは殻の間かく（R）に対してずっと小さく。深さが増すほど少し小さくし、密集しても枝の形が読めるようにする
-  const sphereScale = (node) => {
-    if (node.id === 0) return R * 0.05;
-    const shrink = Math.pow(0.95, node.depth - 1);
-    const base = Math.max(R * 0.028, R * 0.1 * shrink);
-    return node.isEnd ? base * 1.55 : base * 0.82;
-  };
-  // 2D は隣との間かく（扇形の幅）に合わせてさらに小さく。外周ほど扇形が細くなるので、はみ出さない上限を掛ける
-  const sphere2DScale = (node) => {
-    if (node.id === 0) return R * 0.05;
-    const arcLimit = Math.max(R * 0.01, (node.angleSpan || 0.001) * node.depth * R * 0.4);
-    return Math.min(sphereScale(node), arcLimit);
-  };
-  const nodeScale = (node) => (is2D ? sphere2DScale(node) : sphereScale(node));
+  // 球の大きさはすべて同じ（深さ・単語の終わりで変えない）。2D は外周が詰まるので 3D より少し小さく
+  const nodeScale = () => (is2D ? R * 0.035 : R * 0.06);
   const bucketGroups = new Map(); // "深さ:終わりかどうか" → ノード一覧
   for (const node of nodes) {
     if (node.id === 0) continue;
