@@ -239,7 +239,7 @@ function layoutTreeSunburst(root) {
 
 // 入れ子立方体レイアウト。3×3×3 に分けて重ねる比率（重ならないこと）は trie.js の
 // layoutCube（DOM に依らない。test/trie.test.mjs で検査）に任せ、ここでは一辺の長さ（CUBE_S0）を
-// 掛けて world 座標に変換するだけ。node.cubeStep（自分の子の間隔）は球の大きさにも使う。
+// 掛けて world 座標に変換するだけ。一番小さい node.cubeStep（自分の子の間隔）を球の大きさに使う。
 const CUBE_S0 = R * 3; // 全体の一辺。他のモードの広がり（R の数倍）に合わせた大きさ
 function layoutTreeCube(root) {
   layoutCube(root);
@@ -439,10 +439,11 @@ async function main() {
   const sphereGeo = new THREE.SphereGeometry(1, 16, 12);
   const dummy = new THREE.Object3D();
   // 球の大きさはすべて同じ（深さ・単語の終わりで変えない）。2D・格子は円の半径を球が重ならない大きさに広げる。
-  // 立方は深さごとにマスの間隔（node.cubeStep）がどんどん縮むので、それに比例させる（常に間隔の 0.28 倍、
-  // 間隔の半分＝0.5 未満なら隣のマスの球とぶつからない）
+  // 立方は深さごとにマスの間隔（node.cubeStep）がどんどん縮むので、全部を一番深いノードの大きさにそろえる
+  // （一番狭い間隔の 0.28 倍。間隔の半分＝0.5 未満なら隣のマスの球とぶつからない）
   const CUBE_NODE_FACTOR = 0.28;
-  const nodeScale = (node) => (mode === 'cube' ? node.cubeStep * CUBE_S0 * CUBE_NODE_FACTOR : isTopDown() ? NODE_R_2D : R * 0.06);
+  const cubeNodeR = nodes.reduce((m, n) => Math.min(m, n.cubeStep), 1) * CUBE_S0 * CUBE_NODE_FACTOR;
+  const nodeScale = () => (mode === 'cube' ? cubeNodeR : isTopDown() ? NODE_R_2D : R * 0.06);
   const bucketGroups = new Map(); // "深さ:終わりかどうか" → ノード一覧
   for (const node of nodes) {
     if (node.id === 0) continue;
