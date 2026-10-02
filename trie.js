@@ -115,14 +115,14 @@ export function wordsWithPrefix(root, prefix) {
 // 各ノードに angleStart・angleSpan・angle（扇形の中心角, ラジアン）を書き込む。
 // 親の持つ扇形 [angleStart, angleStart+angleSpan) を、子孫の葉の数（leafWeight）に
 // 比例した幅で子にそのまま配り切る（先祖から受け継いだ分を超えて広げ直さない）ので、
-// 兄弟どうし・どの枝も角度が重ならない。
+// 兄弟どうし・どの枝も角度が重ならない。子はアルファベット順に、角度の小さい方から並べる。
 export function layoutRadial(root) {
   assign(root, 0, Math.PI * 2);
   function assign(node, angleStart, angleSpan) {
     node.angleStart = angleStart;
     node.angleSpan = angleSpan;
     node.angle = angleStart + angleSpan / 2;
-    const children = [...node.children.values()];
+    const children = [...node.children.keys()].sort().map((ch) => node.children.get(ch));
     if (!children.length) return;
     const total = children.reduce((s, c) => s + c.leafWeight, 0);
     let a = angleStart;

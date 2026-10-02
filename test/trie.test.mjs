@@ -101,6 +101,15 @@ check('でたらめな 1000 語: 復元とノード数', () => {
 });
 
 // 2D の放射状レイアウト: 兄弟の扇形が重ならず、親の扇形をちょうど埋める
+check('layoutRadial: 兄弟はアルファベット順に角度が増える', () => {
+  const { entries } = buildWordEntries(['dog', 'cat', 'ant', 'car', 'cab'].map((word) => ({ word, meaning: '' })));
+  const { root } = buildTrie(entries);
+  layoutRadial(root);
+  const order = (node) => [...node.children.values()].sort((x, y) => x.angle - y.angle).map((n) => n.char).join('');
+  assert.equal(order(root), 'acd');
+  assert.equal(order(root.children.get('c').children.get('a')), 'brt');
+});
+
 check('layoutRadial: 兄弟の角度が重ならない（2D 表示用）', () => {
   const words = ['cat', 'car', 'card', 'care', 'cart', 'dog', 'do', 'doge', 'deer'];
   const { entries } = buildWordEntries(words.map((word) => ({ word, meaning: '' })));

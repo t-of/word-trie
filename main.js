@@ -136,13 +136,14 @@ function layoutSubtree3D(node, dir, depth) {
 
 // 2D の平面放射状レイアウト。角度の配り方そのもの（重ならないこと）は trie.js の
 // layoutRadial（DOM に依らない。test/trie.test.mjs で検査）に任せ、ここでは
-// 角度 + 深さ×R を x, y 座標に変換するだけ。
+// 角度 + 深さ×R を x, y 座標に変換するだけ。12 時から時計回りに a→z と並ぶよう、角度を π/2 − angle に読み替える。
 function layoutTree2D(root) {
   layoutRadial(root);
   (function walk(node) {
+    const a = Math.PI / 2 - node.angle;
     node.pos2d = node.depth === 0
       ? new THREE.Vector3(0, 0, 0)
-      : new THREE.Vector3(Math.cos(node.angle) * node.depth * R, Math.sin(node.angle) * node.depth * R, 0);
+      : new THREE.Vector3(Math.cos(a) * node.depth * R, Math.sin(a) * node.depth * R, 0);
     for (const child of node.children.values()) walk(child);
   })(root);
 }
