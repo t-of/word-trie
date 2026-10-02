@@ -21,7 +21,7 @@
 
 - `words.csv`（1 行 1 語、`word,意味`。意味の列は無くてよい）を読む。無ければ `words.sample.csv`（仮の単語）を読む。
 - 小文字にそろえ、a〜z 以外の文字を含む語と重複した語は取り除く（除いた件数は画面の隅に出る）。
-- 今入っている `words.csv` は NGSL（New General Service List）の上位 1000 語。出典は下の「データの出典」。
+- 今入っている `words.csv` は NGSL（New General Service List）1.2 の全 2809 語（頻度順）。出典は下の「データの出典」。
   自分の単語帳に差し替えたいときは、同じ形（`word,意味`）の CSV で `words.csv` を上書きする。
 
 ## データの出典
@@ -41,7 +41,7 @@ New General Service List by Browne, C., Culligan, B., and Phillips, J. is licens
 アプリのコード（`trie.js`・`main.js` など）は NGSL を含まないので MIT のままです。
 画面の下にも、この出典を出しています。
 
-`words.csv` は NGSL の上位 1000 語を抜き出したものです（変更点）。
+`words.csv` は NGSL 1.2 の全 2809 語に日本語訳を足したものです（変更点）。1.2 で増えた 9 語（conference・candidate・criteria・click・website・immigration・solar・rose・blog）の訳は本プロジェクトで付けました。
 
 ## アプリとして入れる（PWA）
 
