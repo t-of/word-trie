@@ -161,3 +161,23 @@ export function layoutGrid(root) {
   size(root);
   place(root, 0, 0);
 }
+
+// 地球儀レイアウト（DOM にも three.js にも依らない）。
+// 地表を「高さ z = sin(緯度)（-1〜1）× 経度 lon（0〜2π）」の長方形とみなし、親のマスを子に
+// leafWeight に比例した幅でそのまま配り切る。z で割るので、極の近くでも帯の面積が単語数どおりになる。
+// 割る向きは文字目で交互: 奇数文字目（深さ 0・2・4… の子）は緯度の方向（a が北）、偶数文字目は経度の方向。
+// ノードには zStart・zSpan・lonStart・lonSpan（マス）と z・lon（マスの中心）を書き込む。
+export function layoutGlobe(root) {
+  assign(root, -1, 2, 0, Math.PI * 2);
+  function assign(n, zStart, zSpan, lonStart, lonSpan) {
+    Object.assign(n, { zStart, zSpan, lonStart, lonSpan, z: zStart + zSpan / 2, lon: lonStart + lonSpan / 2 });
+    const ks = [...n.children.keys()].sort().map((ch) => n.children.get(ch));
+    const total = ks.reduce((s, k) => s + k.leafWeight, 0);
+    let top = zStart + zSpan, west = lonStart;
+    for (const k of ks) {
+      const f = k.leafWeight / total;
+      if (n.depth % 2 === 0) { top -= f * zSpan; assign(k, top, f * zSpan, lonStart, lonSpan); }
+      else { assign(k, zStart, zSpan, west, f * lonSpan); west += f * lonSpan; }
+    }
+  }
+}

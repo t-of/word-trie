@@ -1,7 +1,7 @@
 // トライ木の組み立てを確かめる: node test/trie.test.mjs
 import assert from 'node:assert/strict';
 import {
-  normalize, isValidWord, parseCsv, buildWordEntries, buildTrie, collectWords, wordsWithPrefix, layoutRadial, layoutGrid,
+  normalize, isValidWord, parseCsv, buildWordEntries, buildTrie, collectWords, wordsWithPrefix, layoutRadial, layoutGrid, layoutGlobe,
 } from '../trie.js';
 
 let passed = 0;
@@ -162,6 +162,31 @@ check('layoutGrid: 座標が重ならず、親子の線が縦か横になる', (
       assert.ok(sameX !== sameY, `親子の線が斜めになっている: 親(${node.x},${node.y}) 子(${child.x},${child.y})`);
       walk(child);
     }
+  })(root);
+});
+
+// 地球儀レイアウト: 兄弟のマスが重ならず親のマスを埋める。1 文字目は北から a→z、2 文字目は経度の方向に並ぶ
+check('layoutGlobe: マスが重ならず、緯度・経度を交互に割る', () => {
+  const words = ['cat', 'car', 'card', 'care', 'cart', 'dog', 'do', 'doge', 'deer', 'ant'];
+  const { entries } = buildWordEntries(words.map((word) => ({ word, meaning: '' })));
+  const { root } = buildTrie(entries);
+  layoutGlobe(root);
+  const first = [...root.children.values()].sort((a, b) => b.z - a.z).map((n) => n.char).join('');
+  assert.equal(first, 'acd');
+  const EPS = 1e-9;
+  (function walk(n) {
+    assert.ok(n.z >= -1 && n.z <= 1 && n.lon >= 0 && n.lon <= Math.PI * 2);
+    const ks = [...n.children.values()];
+    const latAxis = n.depth % 2 === 0; // 子は緯度（z）の方向に割る
+    const [s, w] = latAxis ? ['zStart', 'zSpan'] : ['lonStart', 'lonSpan'];
+    const [os, ow] = latAxis ? ['lonStart', 'lonSpan'] : ['zStart', 'zSpan'];
+    if (ks.length) {
+      const sorted = ks.sort((a, b) => a[s] - b[s]);
+      for (let i = 1; i < sorted.length; i++) assert.ok(sorted[i - 1][s] + sorted[i - 1][w] <= sorted[i][s] + EPS, '重なっている');
+      assert.ok(Math.abs(sorted.reduce((t, k) => t + k[w], 0) - n[w]) < 1e-6, '親のマスを埋めていない');
+      for (const k of ks) assert.ok(k[os] === n[os] && k[ow] === n[ow], '割らない向きの幅が親と違う');
+    }
+    ks.forEach(walk);
   })(root);
 });
 

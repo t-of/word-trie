@@ -2,7 +2,7 @@
 // トライ木の組み立て（整形・構築）は trie.js にまとめてあり、node からも同じものを検査できる（test/trie.test.mjs）。
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { parseCsv, buildWordEntries, buildTrie, pathWord, wordsWithPrefix, normalize, layoutRadial, layoutGrid } from './trie.js';
+import { parseCsv, buildWordEntries, buildTrie, pathWord, wordsWithPrefix, normalize, layoutRadial, layoutGrid, layoutGlobe } from './trie.js';
 
 WebAppKit.init({ title: 'word-trie', text: '英単語帳を宇宙に浮かぶ文字の木として 3D で見る' });
 
@@ -12,10 +12,10 @@ if ('serviceWorker' in navigator) {
 
 // localStorage はほかのアプリと共有される。キーは 'word-trie.' で始める（RULES.md §3）
 const STORE = 'word-trie.';
-// 表示モード: '3d' | '2d' | 'grid'。ボタンを押すたびに 3d → 2d → grid → 3d と回す
-const MODES = ['3d', '2d', 'grid'];
-const NEXT_MODE = { '3d': '2d', '2d': 'grid', grid: '3d' };
-const MODE_LABEL = { '3d': '3D', '2d': '2D', grid: '格子' };
+// 表示モード: '3d' | '2d' | 'grid' | 'globe'。ボタンを押すたびに 3d → 2d → grid → globe → 3d と回す
+const MODES = ['3d', '2d', 'grid', 'globe'];
+const NEXT_MODE = { '3d': '2d', '2d': 'grid', grid: 'globe', globe: '3d' };
+const MODE_LABEL = { '3d': '3D', '2d': '2D', grid: '格子', globe: '地球' };
 function loadView() {
   try {
     const v = localStorage.getItem(STORE + 'view');
@@ -187,9 +187,29 @@ function layoutTreeGrid(root) {
   })(root);
 }
 
+// 地球儀レイアウト。マスの配り方（重ならないこと）は trie.js の layoutGlobe（DOM に依らない。
+// test/trie.test.mjs で検査）に任せ、ここでは z = sin(緯度)・経度を球面の座標に変換する（y が北）。
+// 1 文字目が地表、深いほど GLOBE_STEP ずつ外に浮かせる（親子のマスの中心が重なっても高さで分かれる）。
+// 地表の半径は、葉 1 枚あたりの面積がおよそ一定になるよう葉の数の平方根に比例させる。
+const GLOBE_STEP = R * 0.15;
+let globeR = R * 2;
+function layoutTreeGlobe(root) {
+  layoutGlobe(root);
+  globeR = Math.max(R * 2, Math.sqrt(root.leafWeight) * 0.2);
+  root.posGlobe = new THREE.Vector3(0, 0, 0);
+  (function walk(node) {
+    for (const child of node.children.values()) {
+      const c = Math.sqrt(Math.max(0, 1 - child.z * child.z));
+      child.dirGlobe = new THREE.Vector3(c * Math.cos(child.lon), child.z, -c * Math.sin(child.lon));
+      child.posGlobe = child.dirGlobe.clone().multiplyScalar(globeR + (child.depth - 1) * GLOBE_STEP);
+      walk(child);
+    }
+  })(root);
+}
+
 // 今の表示モードでのノードの位置
 function posForMode(node, mode) {
-  return mode === '2d' ? node.pos2d : mode === 'grid' ? node.posGrid : node.pos3d;
+  return mode === '2d' ? node.pos2d : mode === 'grid' ? node.posGrid : mode === 'globe' ? node.posGlobe : node.pos3d;
 }
 
 function flattenNodes(root, nodeCount) {
@@ -263,6 +283,7 @@ async function main() {
   layoutTree3D(root);
   layoutTree2D(root); // 角度の配り方（重ならないこと）は trie.js の layoutRadial、node から検査できる
   layoutTreeGrid(root); // 目盛りの配り方（重ならないこと）は trie.js の layoutGrid、node から検査できる
+  layoutTreeGlobe(root); // マスの配り方（重ならないこと）は trie.js の layoutGlobe
   const nodes = flattenNodes(root, nodeCount);
   const endNodes = nodes.filter((n) => n.isEnd);
   let maxDepth = 0;
@@ -288,7 +309,7 @@ async function main() {
 
   // 3D / 2D / 格子。選んだ方は localStorage に覚える。node.pos は今の表示モードの座標（切り替え時に書き換える）
   let mode = loadView();
-  const isTopDown = () => mode !== '3d'; // 2D・格子は真上から見る
+  const isTopDown = () => mode === '2d' || mode === 'grid'; // 2D・格子は真上から見る（3D・地球は回せる）
   for (const n of nodes) n.pos = posForMode(n, mode).clone();
   btnView.textContent = MODE_LABEL[NEXT_MODE[mode]]; // ボタンには切り替え先のモードを出す
 
@@ -307,6 +328,9 @@ async function main() {
   const fovRad2D = (FOV_2D * Math.PI) / 180;
   const overviewDist3D = Math.max(8, (maxDepth || 1) * R * 1.9);
   const overviewPos3D = new THREE.Vector3(overviewDist3D * 0.5, overviewDist3D * 0.35, overviewDist3D * 0.8);
+  // 地球は、一番外の殻がちょうど画面に収まる距離から、3D と同じ向きで見る
+  const overviewDistGlobe = Math.max(8, ((globeR + maxDepth * GLOBE_STEP) / Math.sin(fovRad3D / 2)) * 1.1);
+  const overviewPosGlobe = overviewPos3D.clone().setLength(overviewDistGlobe);
   // 2D・格子は真上から見る。実際の x, y の広がりに余白 8% を足した分が、画面の縦・横どちらにも
   // 収まる距離まで離れる（アスペクト比に応じて、縦・横のきつい方に合わせる）
   const MARGIN_2D = 1.08;
@@ -320,8 +344,8 @@ async function main() {
   const overviewDistGrid = () => overviewDistFor(boundGridHalfX, boundGridHalfY);
   const overviewPos2D = () => new THREE.Vector3(0, 0, overviewDist2D());
   const overviewPosGrid = () => new THREE.Vector3(0, 0, overviewDistGrid());
-  const overviewPos = () => (mode === '2d' ? overviewPos2D() : mode === 'grid' ? overviewPosGrid() : overviewPos3D);
-  const overviewDist = () => (mode === '2d' ? overviewDist2D() : mode === 'grid' ? overviewDistGrid() : overviewDist3D);
+  const overviewPos = () => (mode === '2d' ? overviewPos2D() : mode === 'grid' ? overviewPosGrid() : mode === 'globe' ? overviewPosGlobe : overviewPos3D);
+  const overviewDist = () => (mode === '2d' ? overviewDist2D() : mode === 'grid' ? overviewDistGrid() : mode === 'globe' ? overviewDistGlobe : overviewDist3D);
   // #scene の大きさは CSS で決まっていて、canvas を作る前でも読める
   camera.aspect = sceneEl.clientWidth / sceneEl.clientHeight || 1;
   camera.updateProjectionMatrix();
@@ -335,7 +359,7 @@ async function main() {
   controls.enableDamping = true;
   controls.dampingFactor = 0.08;
   controls.minDistance = 1;
-  controls.maxDistance = Math.max(overviewDist3D, overviewDist2D(), overviewDistGrid()) * 1.5;
+  controls.maxDistance = Math.max(overviewDist3D, overviewDist2D(), overviewDistGrid(), overviewDistGlobe) * 1.5;
   controls.target.set(0, 0, 0);
   // 2D・格子の間は回転を切り、1 本指/左ドラッグをパンにする（拡大はホイール・ピンチのまま）。
   // 画角も望遠にして、真上から見た図に近づける
@@ -601,7 +625,8 @@ async function main() {
   // 球の一覧をちょうど収める位置を計算する（中心を見て、全部が視野に入る距離まで下がる）。
   // ランダム再生の最後（道の全体を見せたいとき）に使う。
   function cameraDir3D(node) {
-    return (node && node.id !== 0 && node.dir3d) || new THREE.Vector3(0.5, 0.35, 0.8).normalize();
+    const dir = mode === 'globe' ? node?.dirGlobe : node?.dir3d; // 地球は真上（地表の外側）から見下ろす
+    return (node && node.id !== 0 && dir) || new THREE.Vector3(0.5, 0.35, 0.8).normalize();
   }
 
   function frameNodes(nodeList) {
@@ -631,7 +656,7 @@ async function main() {
       const half = farHalf * (1 - t) + closeHalf * t;
       return half / Math.tan(fovRad2D / 2);
     }
-    const far = overviewDist3D * 0.55;
+    const far = (mode === 'globe' ? overviewDistGlobe : overviewDist3D) * 0.55;
     const close = R * 3.2;
     return far * (1 - t) + close * t;
   }
