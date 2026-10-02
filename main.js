@@ -306,8 +306,8 @@ async function main() {
   // 道を光らせるのは、同じ位置に重ねる白い InstancedMesh（highlightMesh）の表示・非表示で行う。
   const sphereGeo = new THREE.SphereGeometry(1, 16, 12);
   const dummy = new THREE.Object3D();
-  // 球の大きさはすべて同じ（深さ・単語の終わりで変えない）。2D は外周が詰まるので 3D より少し小さく
-  const nodeScale = () => (is2D ? R * 0.035 : R * 0.06);
+  // 球は文字数目（深さ）が進むほど小さく。単語の終わりかどうかでは変えない。2D は外周が詰まるので 3D より少し小さく
+  const nodeScale = (node) => (is2D ? R * 0.045 : R * 0.075) * Math.max(0.3, Math.pow(0.85, node.depth));
   const bucketGroups = new Map(); // "深さ:終わりかどうか" → ノード一覧
   for (const node of nodes) {
     if (node.id === 0) continue;
