@@ -1,7 +1,7 @@
 // トライ木の組み立てを確かめる: node test/trie.test.mjs
 import assert from 'node:assert/strict';
 import {
-  normalize, isValidWord, parseCsv, buildWordEntries, buildTrie, collectWords, wordsWithPrefix, layoutRadial,
+  normalize, isValidWord, parseCsv, buildWordEntries, buildTrie, collectWords, wordsWithPrefix, layoutRadial, layoutGrid,
 } from '../trie.js';
 
 let passed = 0;
@@ -139,6 +139,29 @@ check('layoutRadial: 兄弟の角度が重ならない（2D 表示用）', () =>
     const total = sorted.reduce((s, c) => s + c.angleSpan, 0);
     assert.ok(Math.abs(total - node.angleSpan) < 1e-6, `合計がそろわない: ${total} vs ${node.angleSpan}`);
     for (const c of children) walkCheckOverlap(c);
+  })(root);
+});
+
+// 格子レイアウト: どの 2 ノードも座標が重ならず、親子の線は縦か横のどちらかになる
+check('layoutGrid: 座標が重ならず、親子の線が縦か横になる', () => {
+  const words = ['cat', 'car', 'card', 'care', 'cart', 'dog', 'do', 'doge', 'deer'];
+  const { entries } = buildWordEntries(words.map((word) => ({ word, meaning: '' })));
+  const { root } = buildTrie(entries);
+  layoutGrid(root);
+
+  const seen = new Set();
+  (function walk(node) {
+    assert.equal(typeof node.x, 'number');
+    assert.equal(typeof node.y, 'number');
+    const key = `${node.x},${node.y}`;
+    assert.ok(!seen.has(key), `座標が重なっている: ${key}`);
+    seen.add(key);
+    for (const child of node.children.values()) {
+      // 親子は x か y のどちらか一方だけが違う（まっすぐ縦か横の線になる）
+      const sameX = node.x === child.x, sameY = node.y === child.y;
+      assert.ok(sameX !== sameY, `親子の線が斜めになっている: 親(${node.x},${node.y}) 子(${child.x},${child.y})`);
+      walk(child);
+    }
   })(root);
 });
 

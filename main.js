@@ -2,7 +2,7 @@
 // トライ木の組み立て（整形・構築）は trie.js にまとめてあり、node からも同じものを検査できる（test/trie.test.mjs）。
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { parseCsv, buildWordEntries, buildTrie, pathWord, wordsWithPrefix, normalize, layoutRadial } from './trie.js';
+import { parseCsv, buildWordEntries, buildTrie, pathWord, wordsWithPrefix, normalize, layoutRadial, layoutGrid } from './trie.js';
 
 WebAppKit.init({ title: 'word-trie', text: '英単語帳を宇宙に浮かぶ文字の木として 3D で見る' });
 
@@ -12,11 +12,18 @@ if ('serviceWorker' in navigator) {
 
 // localStorage はほかのアプリと共有される。キーは 'word-trie.' で始める（RULES.md §3）
 const STORE = 'word-trie.';
+// 表示モード: '3d' | '2d' | 'grid'。ボタンを押すたびに 3d → 2d → grid → 3d と回す
+const MODES = ['3d', '2d', 'grid'];
+const NEXT_MODE = { '3d': '2d', '2d': 'grid', grid: '3d' };
+const MODE_LABEL = { '3d': '3D', '2d': '2D', grid: '格子' };
 function loadView() {
-  try { return localStorage.getItem(STORE + 'view') === '2d'; } catch { return false; }
+  try {
+    const v = localStorage.getItem(STORE + 'view');
+    return MODES.includes(v) ? v : '3d'; // 古い '2d' / '3d' もそのまま読める
+  } catch { return '3d'; }
 }
-function saveView(is2D) {
-  try { localStorage.setItem(STORE + 'view', is2D ? '2d' : '3d'); } catch { /* 保存できなくても遊べる */ }
+function saveView(mode) {
+  try { localStorage.setItem(STORE + 'view', mode); } catch { /* 保存できなくても遊べる */ }
 }
 
 const R = 1.9;          // 深さ 1 ごとの半径（殻の間かく。3D・2D 共通）
@@ -161,6 +168,30 @@ function layoutTree2D(root) {
   })(root);
 }
 
+// 格子レイアウト。目盛りの配り方（重ならないこと）は trie.js の layoutGrid（DOM に依らない。
+// test/trie.test.mjs で検査）に任せ、ここでは目盛り単位を世界の大きさに変換する。
+// three.js は y が上向きなので、画面では y が下向きに伸びるよう符号を反転する。全体は中心が原点になるようずらす。
+const GRID_CELL = Math.max(R * 0.5, NODE_R_2D * 2 * 1.4);
+function layoutTreeGrid(root) {
+  layoutGrid(root);
+  let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+  (function bounds(node) {
+    minX = Math.min(minX, node.x); maxX = Math.max(maxX, node.x);
+    minY = Math.min(minY, node.y); maxY = Math.max(maxY, node.y);
+    for (const child of node.children.values()) bounds(child);
+  })(root);
+  const cx = (minX + maxX) / 2, cy = (minY + maxY) / 2;
+  (function walk(node) {
+    node.posGrid = new THREE.Vector3((node.x - cx) * GRID_CELL, -(node.y - cy) * GRID_CELL, 0);
+    for (const child of node.children.values()) walk(child);
+  })(root);
+}
+
+// 今の表示モードでのノードの位置
+function posForMode(node, mode) {
+  return mode === '2d' ? node.pos2d : mode === 'grid' ? node.posGrid : node.pos3d;
+}
+
 function flattenNodes(root, nodeCount) {
   const nodes = new Array(nodeCount);
   (function walk(node) {
@@ -231,6 +262,7 @@ async function main() {
   const { root, nodeCount, wordCount } = buildTrie(entries);
   layoutTree3D(root);
   layoutTree2D(root); // 角度の配り方（重ならないこと）は trie.js の layoutRadial、node から検査できる
+  layoutTreeGrid(root); // 目盛りの配り方（重ならないこと）は trie.js の layoutGrid、node から検査できる
   const nodes = flattenNodes(root, nodeCount);
   const endNodes = nodes.filter((n) => n.isEnd);
   let maxDepth = 0;
@@ -251,11 +283,14 @@ async function main() {
   }
   const bound2DHalfX = Math.max(R, percentile(nodes.map((n) => Math.abs(n.pos2d.x)), 0.94));
   const bound2DHalfY = Math.max(R, percentile(nodes.map((n) => Math.abs(n.pos2d.y)), 0.94));
+  const boundGridHalfX = Math.max(R, percentile(nodes.map((n) => Math.abs(n.posGrid.x)), 0.94));
+  const boundGridHalfY = Math.max(R, percentile(nodes.map((n) => Math.abs(n.posGrid.y)), 0.94));
 
-  // 2D ⇔ 3D。選んだ方は localStorage に覚える。node.pos は今の表示モードの座標（切り替え時に書き換える）
-  let is2D = loadView();
-  for (const n of nodes) n.pos = (is2D ? n.pos2d : n.pos3d).clone();
-  btnView.textContent = is2D ? '3D' : '2D'; // ボタンには切り替え先のモードを出す
+  // 3D / 2D / 格子。選んだ方は localStorage に覚える。node.pos は今の表示モードの座標（切り替え時に書き換える）
+  let mode = loadView();
+  const isTopDown = () => mode !== '3d'; // 2D・格子は真上から見る
+  for (const n of nodes) n.pos = posForMode(n, mode).clone();
+  btnView.textContent = MODE_LABEL[NEXT_MODE[mode]]; // ボタンには切り替え先のモードを出す
 
   // ---- three.js の下ごしらえ ----
   const scene = new THREE.Scene();
@@ -272,18 +307,21 @@ async function main() {
   const fovRad2D = (FOV_2D * Math.PI) / 180;
   const overviewDist3D = Math.max(8, (maxDepth || 1) * R * 1.9);
   const overviewPos3D = new THREE.Vector3(overviewDist3D * 0.5, overviewDist3D * 0.35, overviewDist3D * 0.8);
-  // 2D は真上から見る。実際の x, y の広がりに余白 8% を足した分が、画面の縦・横どちらにも
+  // 2D・格子は真上から見る。実際の x, y の広がりに余白 8% を足した分が、画面の縦・横どちらにも
   // 収まる距離まで離れる（アスペクト比に応じて、縦・横のきつい方に合わせる）
   const MARGIN_2D = 1.08;
-  function overviewDist2D() {
+  function overviewDistFor(boundHalfX, boundHalfY) {
     const aspect = camera.aspect || 1;
-    const distH = (bound2DHalfY * MARGIN_2D) / Math.tan(fovRad2D / 2);
-    const distW = (bound2DHalfX * MARGIN_2D) / (Math.tan(fovRad2D / 2) * aspect);
+    const distH = (boundHalfY * MARGIN_2D) / Math.tan(fovRad2D / 2);
+    const distW = (boundHalfX * MARGIN_2D) / (Math.tan(fovRad2D / 2) * aspect);
     return Math.max(8, distH, distW);
   }
+  const overviewDist2D = () => overviewDistFor(bound2DHalfX, bound2DHalfY);
+  const overviewDistGrid = () => overviewDistFor(boundGridHalfX, boundGridHalfY);
   const overviewPos2D = () => new THREE.Vector3(0, 0, overviewDist2D());
-  const overviewPos = () => (is2D ? overviewPos2D() : overviewPos3D);
-  const overviewDist = () => (is2D ? overviewDist2D() : overviewDist3D);
+  const overviewPosGrid = () => new THREE.Vector3(0, 0, overviewDistGrid());
+  const overviewPos = () => (mode === '2d' ? overviewPos2D() : mode === 'grid' ? overviewPosGrid() : overviewPos3D);
+  const overviewDist = () => (mode === '2d' ? overviewDist2D() : mode === 'grid' ? overviewDistGrid() : overviewDist3D);
   // #scene の大きさは CSS で決まっていて、canvas を作る前でも読める
   camera.aspect = sceneEl.clientWidth / sceneEl.clientHeight || 1;
   camera.updateProjectionMatrix();
@@ -297,18 +335,19 @@ async function main() {
   controls.enableDamping = true;
   controls.dampingFactor = 0.08;
   controls.minDistance = 1;
-  controls.maxDistance = Math.max(overviewDist3D, overviewDist2D()) * 1.5;
+  controls.maxDistance = Math.max(overviewDist3D, overviewDist2D(), overviewDistGrid()) * 1.5;
   controls.target.set(0, 0, 0);
-  // 2D の間は回転を切り、1 本指/左ドラッグをパンにする（拡大はホイール・ピンチのまま）。
+  // 2D・格子の間は回転を切り、1 本指/左ドラッグをパンにする（拡大はホイール・ピンチのまま）。
   // 画角も望遠にして、真上から見た図に近づける
   function applyControlMode() {
-    controls.enableRotate = !is2D;
-    camera.fov = is2D ? FOV_2D : FOV_3D;
+    const top = isTopDown();
+    controls.enableRotate = !top;
+    camera.fov = top ? FOV_2D : FOV_3D;
     camera.updateProjectionMatrix();
-    controls.mouseButtons = is2D
+    controls.mouseButtons = top
       ? { LEFT: THREE.MOUSE.PAN, MIDDLE: THREE.MOUSE.DOLLY, RIGHT: THREE.MOUSE.PAN }
       : { LEFT: THREE.MOUSE.ROTATE, MIDDLE: THREE.MOUSE.DOLLY, RIGHT: THREE.MOUSE.PAN };
-    controls.touches = is2D
+    controls.touches = top
       ? { ONE: THREE.TOUCH.PAN, TWO: THREE.TOUCH.DOLLY_PAN }
       : { ONE: THREE.TOUCH.ROTATE, TWO: THREE.TOUCH.DOLLY_PAN };
   }
@@ -319,8 +358,8 @@ async function main() {
   // 道を光らせるのは、同じ位置に重ねる白い InstancedMesh（highlightMesh）の表示・非表示で行う。
   const sphereGeo = new THREE.SphereGeometry(1, 16, 12);
   const dummy = new THREE.Object3D();
-  // 球の大きさはすべて同じ（深さ・単語の終わりで変えない）。2D は円の半径を球が重ならない大きさに広げる（layoutTree2D）
-  const nodeScale = () => (is2D ? NODE_R_2D : R * 0.06);
+  // 球の大きさはすべて同じ（深さ・単語の終わりで変えない）。2D・格子は円の半径を球が重ならない大きさに広げる
+  const nodeScale = () => (isTopDown() ? NODE_R_2D : R * 0.06);
   const bucketGroups = new Map(); // "深さ:終わりかどうか" → ノード一覧
   for (const node of nodes) {
     if (node.id === 0) continue;
@@ -572,10 +611,10 @@ async function main() {
     let spread = R * 0.5;
     for (const n of nodeList) spread = Math.max(spread, n.pos.distanceTo(center));
     const last = nodeList[nodeList.length - 1];
-    const dist = (spread / Math.sin((is2D ? fovRad2D : fovRad3D) / 2)) * 1.3 + R * 0.6;
-    const dir = is2D ? new THREE.Vector3(0, 0, 1) : cameraDir3D(last);
+    const dist = (spread / Math.sin((isTopDown() ? fovRad2D : fovRad3D) / 2)) * 1.3 + R * 0.6;
+    const dir = isTopDown() ? new THREE.Vector3(0, 0, 1) : cameraDir3D(last);
     const toPos = center.clone().add(dir.clone().multiplyScalar(dist));
-    if (is2D) { toPos.x = center.x; toPos.y = center.y; toPos.z = dist; } // 2D は常に真上から
+    if (isTopDown()) { toPos.x = center.x; toPos.y = center.y; toPos.z = dist; } // 2D・格子は常に真上から
     return { toPos, toTarget: center };
   }
 
@@ -583,10 +622,11 @@ async function main() {
   // 深さが浅いほど全体を見る距離に近づけ、深いほど寄る（根からの道の一部も見える）。
   function singleNodeDistance(node) {
     const t = maxDepth > 0 ? node.depth / maxDepth : 0;
-    if (is2D) {
+    if (isTopDown()) {
       // 距離ではなく「画面の半分の高さ（ワールド単位）」で浅い⇔深いを補間し、そこから画角で距離を出す。
-      // 2D は画角がごく狭いので、3D と同じ「距離」をそのまま流用すると寄りすぎてしまう。
-      const farHalf = bound2DHalfY * MARGIN_2D * 0.55;
+      // 2D・格子は画角がごく狭いので、3D と同じ「距離」をそのまま流用すると寄りすぎてしまう。
+      const boundHalfY = mode === 'grid' ? boundGridHalfY : bound2DHalfY;
+      const farHalf = boundHalfY * MARGIN_2D * 0.55;
       const closeHalf = R * 1.7;
       const half = farHalf * (1 - t) + closeHalf * t;
       return half / Math.tan(fovRad2D / 2);
@@ -608,7 +648,7 @@ async function main() {
       return;
     }
     const dist = singleNodeDistance(node);
-    const dir = is2D ? new THREE.Vector3(0, 0, 1) : cameraDir3D(node);
+    const dir = isTopDown() ? new THREE.Vector3(0, 0, 1) : cameraDir3D(node);
     const toPos = node.pos.clone().add(dir.clone().multiplyScalar(dist));
     animateCamera(toPos, node.pos.clone());
   }
@@ -620,10 +660,10 @@ async function main() {
     animateCamera(overviewPos(), new THREE.Vector3(0, 0, 0));
   }
 
-  // 2D ⇔ 3D の切り替え。描き方（InstancedMesh・線・にじみ・道のハイライト・ラベル）はそのまま、
+  // 3D / 2D / 格子の切り替え。描き方（InstancedMesh・線・にじみ・道のハイライト・ラベル）はそのまま、
   // node.pos を書き換えて位置だけ作り直す。
   function rebuildPositions() {
-    for (const n of nodes) n.pos.copy(is2D ? n.pos2d : n.pos3d);
+    for (const n of nodes) n.pos.copy(posForMode(n, mode));
     for (const mesh of bucketMeshes) {
       const ids = mesh.userData.nodeIds;
       for (let i = 0; i < ids.length; i++) {
@@ -647,13 +687,13 @@ async function main() {
     if (currentPath.length) lightPath(selectedId); // 道のハイライト・にじみの位置も作り直す
   }
 
-  function setMode(next2D) {
-    if (next2D === is2D) return;
-    is2D = next2D;
-    saveView(is2D);
+  function setMode(next) {
+    if (next === mode) return;
+    mode = next;
+    saveView(mode);
     applyControlMode();
     rebuildPositions();
-    btnView.textContent = is2D ? '3D' : '2D';
+    btnView.textContent = MODE_LABEL[NEXT_MODE[mode]];
     if (selectedId !== 0) selectNode(selectedId, { moveCamera: true });
     else animateCamera(overviewPos(), new THREE.Vector3(0, 0, 0), 600);
   }
@@ -748,7 +788,7 @@ async function main() {
 
   sheetClose.addEventListener('click', () => { sheetEl.hidden = true; });
 
-  btnView.addEventListener('click', () => { setMode(!is2D); });
+  btnView.addEventListener('click', () => { setMode(NEXT_MODE[mode]); });
 
   // ---- 描画ループ・リサイズ ----
   function resize() {
@@ -762,8 +802,8 @@ async function main() {
 
   function tick() {
     controls.update();
-    // 2D は必ず target の真上（パンのあとなどに角度がずれない念のための保険）
-    if (is2D) {
+    // 2D・格子は必ず target の真上（パンのあとなどに角度がずれない念のための保険）
+    if (isTopDown()) {
       camera.position.x = controls.target.x;
       camera.position.y = controls.target.y;
       camera.up.set(0, 1, 0);

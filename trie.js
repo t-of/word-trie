@@ -133,3 +133,31 @@ export function layoutRadial(root) {
     }
   }
 }
+
+// 格子レイアウト（DOM にも three.js にも依らない）。
+// 深さ d のノードは、子を d が偶数なら x 方向、奇数なら y 方向に一列に並べる（親がその列の先頭、
+// 子はアルファベット順）。根（深さ 0）の子 = 1 文字目は横に一列、2 文字目は縦、3 文字目は横…と交互になる。
+// 部分木ごとの外枠（box）を下から求め、兄弟の部分木は外枠の分だけずらして重ならないようにする。
+// ノードには x, y（格子の目盛り単位。1 目盛り = G）を書き込む。
+export function layoutGrid(root) {
+  const G = 1;
+  const kids = (n) => [...n.children.keys()].sort().map((ch) => n.children.get(ch));
+  function size(n) {
+    const ax = n.depth % 2 === 0 ? 'x' : 'y', bx = ax === 'x' ? 'y' : 'x';
+    const ks = kids(n);
+    ks.forEach(size);
+    n.box = { x: G, y: G };
+    if (ks.length) {
+      n.box[ax] = G + ks.reduce((s, k) => s + k.box[ax], 0);
+      n.box[bx] = Math.max(G, ...ks.map((k) => k.box[bx]));
+    }
+  }
+  function place(n, x, y) {
+    n.x = x; n.y = y;
+    const ax = n.depth % 2 === 0 ? 'x' : 'y';
+    const p = { x, y }; p[ax] += G;
+    for (const k of kids(n)) { place(k, p.x, p.y); p[ax] += k.box[ax]; }
+  }
+  size(root);
+  place(root, 0, 0);
+}
