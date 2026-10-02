@@ -213,6 +213,14 @@ check('layoutCube: 親の中心からの向き・大きさが正しく、兄弟�
     }
   })(root);
 
+  // 並び: 上の段の奥の左が a、上の段の中心が e、真ん中の段の中心を飛ばして m の次の n は右、下の段の手前の右が z
+  assert.deepEqual(CUBE_DIRS[0], [-1, 1, -1]);
+  assert.deepEqual(CUBE_DIRS[4], [0, 1, 0]);
+  assert.deepEqual(CUBE_DIRS[12], [-1, 0, 0]);
+  assert.deepEqual(CUBE_DIRS[13], [1, 0, 0]);
+  assert.deepEqual(CUBE_DIRS[25], [1, -1, 1]);
+  assert.equal(new Set(CUBE_DIRS.map(String)).size, 26);
+
   // 同じ文字はいつも同じ向き: 'a' の子は深さによらず常に CUBE_DIRS[0] 方向
   const aDir = CUBE_DIRS[0];
   (function collectA(node) {

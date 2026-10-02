@@ -184,10 +184,12 @@ export function layoutGlobe(root) {
 
 // 入れ子の立方体レイアウト（DOM にも three.js にも依らない）。親の立方体を 3×3×3 に分け、
 // 中心に自分、周りの 26 マス（= 3^3 − 1）に子を置く。向きは {-1,0,1}^3 から (0,0,0) を除いた
-// 26 方向を x,y,z の辞書順に並べたもの（CUBE_DIRS）から、文字 a〜z の番号で選ぶ（同じ文字はいつも同じ向き）。
+// 26 方向（CUBE_DIRS）から、文字 a〜z の番号で選ぶ（同じ文字はいつも同じ向き）。
+// 並びは電話のボタンのように、上の段（y=1）から: 段の中は奥（z=-1）の列から手前へ、列の中は左（x=-1）から右へ。
+// 上の段 a〜i、真ん中の段 j〜q（中心は自分なので飛ばす）、下の段 r〜z。
 export const CUBE_DIRS = (() => {
   const dirs = [];
-  for (const x of [-1, 0, 1]) for (const y of [-1, 0, 1]) for (const z of [-1, 0, 1]) {
+  for (const y of [1, 0, -1]) for (const z of [-1, 0, 1]) for (const x of [-1, 0, 1]) {
     if (x || y || z) dirs.push([x, y, z]);
   }
   return dirs;
