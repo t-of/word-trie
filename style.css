@@ -66,26 +66,6 @@ button { font: inherit; color: inherit; }
   touch-action: none; /* OrbitControls がドラッグ・ピンチを扱う */
 }
 
-/* 文字ラベル: カメラに近い球と、触れている球にだけ出すプール */
-#labels {
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-}
-.node-label {
-  position: absolute;
-  transform: translate(-50%, -50%);
-  font-size: 12px;
-  font-weight: 600;
-  color: #fff;
-  text-shadow: 0 0 4px rgba(0, 0, 0, 0.9), 0 0 8px rgba(0, 0, 0, 0.6);
-  white-space: nowrap;
-  display: none;
-}
-.node-label.is-visible { display: block; }
-.node-label.is-hover { color: var(--accent); font-size: 14px; }
-.node-label.is-path { color: #ff8fe0; font-size: 14px; font-weight: 800; }
-
 .hud {
   position: absolute;
   left: max(8px, env(safe-area-inset-left));

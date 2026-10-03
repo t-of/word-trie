@@ -31,11 +31,9 @@ function saveView(mode) {
 }
 
 const R = 1.9;          // 深さ 1 ごとの半径（殻の間かく。3D・2D 共通）
-const LABEL_COUNT = 40; // ラベルを出す球の数（+ マウスが乗った球）
 const RANDOM_TICK = 250; // ランダムな単語を 1 文字ずつ光らせる間かく（ms）
 
 const sceneEl = document.getElementById('scene');
-const labelsEl = document.getElementById('labels');
 const statsEl = document.getElementById('stats');
 const searchInput = document.getElementById('search-input');
 const searchMsg = document.getElementById('search-msg');
@@ -275,6 +273,58 @@ function pathToRoot(node) {
   return path;
 }
 
+// ---- ノードの文字 ----
+
+// A〜Z を 8×4 のマスに並べた 1 枚の絵。縁を黒くして、文字どうしが重なっても読めるようにする
+function makeLetterAtlas() {
+  const cell = 128;
+  const canvas = document.createElement('canvas');
+  canvas.width = cell * 8;
+  canvas.height = cell * 4;
+  const ctx = canvas.getContext('2d');
+  ctx.font = `800 ${cell * 0.78}px system-ui, sans-serif`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.lineWidth = cell * 0.12;
+  ctx.lineJoin = 'round';
+  ctx.strokeStyle = '#000';
+  ctx.fillStyle = '#fff';
+  for (let i = 0; i < 26; i++) {
+    const ch = String.fromCharCode(65 + i);
+    const x = (i % 8 + 0.5) * cell, y = (Math.floor(i / 8) + 0.53) * cell;
+    ctx.strokeText(ch, x, y);
+    ctx.fillText(ch, x, y);
+  }
+  return new THREE.CanvasTexture(canvas);
+}
+const letterAtlas = makeLetterAtlas();
+const letterIndex = (node) => node.char.charCodeAt(0) - 97; // 'a' → 0
+
+// 文字の板を InstancedMesh で描く材質。頂点シェーダーで、板をいつもカメラの正面に向ける
+// （instanceMatrix からは位置と大きさだけ使う）。どの文字かは、板ごとの属性 aLetter（0〜25）で選ぶ。
+// 色は MeshBasicMaterial の color のままなので、暗くする処理（setDimmed）もそのまま効く
+function makeLetterMaterial(params) {
+  const mat = new THREE.MeshBasicMaterial({ map: letterAtlas, alphaTest: 0.5, ...params });
+  mat.onBeforeCompile = (shader) => {
+    shader.vertexShader = shader.vertexShader
+      .replace('#include <common>', '#include <common>\nattribute float aLetter;')
+      .replace('#include <uv_vertex>', '#include <uv_vertex>\nvMapUv = (vMapUv + vec2(mod(aLetter, 8.0), 3.0 - floor(aLetter / 8.0))) / vec2(8.0, 4.0);')
+      .replace('#include <project_vertex>', [
+        'vec4 mvPosition = modelViewMatrix * instanceMatrix * vec4(0.0, 0.0, 0.0, 1.0);',
+        'mvPosition.xy += position.xy * length(instanceMatrix[0].xyz);',
+        'gl_Position = projectionMatrix * mvPosition;',
+      ].join('\n'));
+  };
+  return mat;
+}
+
+// 板 1 枚（一辺 2 ＝ 半径 1 の球と同じ scale で扱える）と、板ごとの文字の属性
+function makeLetterGeometry(count) {
+  const geo = new THREE.PlaneGeometry(2, 2);
+  geo.setAttribute('aLetter', new THREE.InstancedBufferAttribute(new Float32Array(count), 1));
+  return geo;
+}
+
 // ---- 背景（星と星雲） ----
 
 function makeGlowTexture(inner, outer) {
@@ -434,17 +484,20 @@ async function main() {
   }
   applyControlMode();
 
-  // 球: 深さ・単語の終わりかどうかでまとめた InstancedMesh（色は材質ごとの固定色）。
-  // instanceColor（球ごとの色の書き換え）はブラウザによって描画されない個体があったため使わない。
-  // 道を光らせるのは、同じ位置に重ねる白い InstancedMesh（highlightMesh）の表示・非表示で行う。
+  // ノード: 深さ 1 からはその文字（A〜Z）の板、根（深さ 0）だけ小さい球。
+  // 深さ・単語の終わりかどうかでまとめた InstancedMesh（色は材質ごとの固定色）。
+  // instanceColor（ノードごとの色の書き換え）はブラウザによって描画されない個体があったため使わない。
+  // 道を光らせるのは、同じ位置に重ねる InstancedMesh（highlightMesh）の表示・非表示で行う。
+  // クリックの当たり判定は、同じ instanceMatrix を使う見えない球（pickMeshes）で取る（板は向きが変わるため）
   const sphereGeo = new THREE.SphereGeometry(1, 16, 12);
   const dummy = new THREE.Object3D();
-  // 球の大きさはすべて同じ（深さ・単語の終わりで変えない）。2D・格子は円の半径を球が重ならない大きさに広げる。
-  // 立方は球の代わりに立方体（boxGeo）で描き、深さごとに縮むマスの間隔（node.cubeStep）に比例させる
-  // （一辺の半分が間隔の 0.28 倍。0.5 未満なら隣のマスの立方体とぶつからない）
-  const boxGeo = new THREE.BoxGeometry(2, 2, 2); // 一辺 2 ＝ 半径 1 の球と同じ scale で扱える
+  // 大きさはすべて同じ（深さ・単語の終わりで変えない）。2D・格子は重ならない大きさに広げる。
+  // 立方は深さごとに縮むマスの間隔（node.cubeStep）に比例させる
+  // （半分の幅が間隔の 0.28 倍。0.5 未満なら隣のマスとぶつからない）
   const CUBE_NODE_FACTOR = 0.28;
-  const nodeScale = (node) => (isCubeMode(mode) ? node.cubeStep * CUBE_S0 * CUBE_NODE_FACTOR : isTopDown() ? NODE_R_2D : R * 0.06);
+  const ROOT_FACTOR = 0.5; // 根の球はほかのノードより小さく
+  const nodeScale = (node) => (node.id === 0 ? ROOT_FACTOR : 1)
+    * (isCubeMode(mode) ? node.cubeStep * CUBE_S0 * CUBE_NODE_FACTOR : isTopDown() ? NODE_R_2D : R * 0.06);
   const bucketGroups = new Map(); // "深さ:終わりかどうか" → ノード一覧
   for (const node of nodes) {
     if (node.id === 0) continue;
@@ -453,24 +506,33 @@ async function main() {
     bucketGroups.get(key).push(node);
   }
   const bucketMeshes = [];
+  const pickMeshes = [];
+  const pickMat = new THREE.MeshBasicMaterial();
   const dimmables = []; // { mat, color } の一覧。道を選んでいる間、これ以外の色を暗くする
   for (const [key, list] of bucketGroups) {
     const [depthStr, endStr] = key.split(':');
     const color = depthColor(Number(depthStr), maxDepth, endStr === '1');
-    const mat = new THREE.MeshBasicMaterial({ color });
-    const mesh = new THREE.InstancedMesh(sphereGeo, mat, list.length);
+    const mat = makeLetterMaterial({ color });
+    const geo = makeLetterGeometry(list.length);
+    const mesh = new THREE.InstancedMesh(geo, mat, list.length);
     const nodeIds = new Array(list.length);
     list.forEach((node, i) => {
       dummy.position.copy(node.pos);
       dummy.scale.setScalar(nodeScale(node));
       dummy.updateMatrix();
       mesh.setMatrixAt(i, dummy.matrix);
+      geo.attributes.aLetter.array[i] = letterIndex(node);
       nodeIds[i] = node.id;
     });
     mesh.instanceMatrix.needsUpdate = true;
-    mesh.userData.nodeIds = nodeIds;
+    mesh.frustumCulled = false; // 板の向きはシェーダーで変わるので、three.js の見える範囲の計算に任せない
     scene.add(mesh);
     bucketMeshes.push(mesh);
+    const pick = new THREE.InstancedMesh(sphereGeo, pickMat, list.length);
+    pick.instanceMatrix = mesh.instanceMatrix; // 位置・大きさは文字の板と共通
+    pick.userData.nodeIds = nodeIds;
+    pick.visible = false; // 描かない（Raycaster は visible を見ないので当たり判定には使える）
+    pickMeshes.push(pick);
     dimmables.push({ mat, color });
   }
   const rootColor = new THREE.Color(0x33415a);
@@ -488,10 +550,12 @@ async function main() {
     glowMat.opacity = active ? 0.8 * DIM_FACTOR : 0.8;
   }
 
-  // 道を光らせるための、白い球を重ねる InstancedMesh（根からの道の長さぶん）
+  // 道を光らせるための、同じ文字を重ねる InstancedMesh（根からの道の長さぶん）
   const MAX_PATH = 80;
-  const highlightMat = new THREE.MeshBasicMaterial({ color: 0xff53c8, transparent: true, opacity: 0.95, blending: THREE.AdditiveBlending, depthWrite: false });
-  const highlightMesh = new THREE.InstancedMesh(sphereGeo, highlightMat, MAX_PATH);
+  const highlightMat = makeLetterMaterial({ color: 0xff53c8, transparent: true, opacity: 0.95, blending: THREE.AdditiveBlending, depthWrite: false });
+  const highlightGeo = makeLetterGeometry(MAX_PATH);
+  const highlightMesh = new THREE.InstancedMesh(highlightGeo, highlightMat, MAX_PATH);
+  highlightMesh.frustumCulled = false;
   function hideHighlightFrom(start) {
     for (let i = start; i < MAX_PATH; i++) {
       dummy.position.set(0, 0, 0);
@@ -615,59 +679,12 @@ async function main() {
     pathLineMesh.visible = !sun;
     highlightMesh.visible = !sun;
     glowPoints.visible = !sun && !isCubeMode(mode); // 立方はにじみがノードより大きく白くつぶれるので出さない
-    const geo = mode === 'cube' ? boxGeo : sphereGeo;
-    for (const mesh of [...bucketMeshes, rootMesh, highlightMesh]) mesh.geometry = geo;
   }
   updateVisibility();
 
-  // ---- ラベル（文字）: プールを使い回す ----
-  // 道 → ホバー → 近い順、の優先度で置く。既に置いたラベルから 14px 以内に来るものは出さない
-  // （外周で団子にならないように）。
-  const LABEL_MIN_GAP = 14;
-  const labelPool = [];
-  for (let i = 0; i < LABEL_COUNT + MAX_PATH + 1; i++) {
-    const el = document.createElement('div');
-    el.className = 'node-label';
-    labelsEl.appendChild(el);
-    labelPool.push(el);
-  }
-  let currentPath = []; // 根からの道（道を選んでいないときは空）
-
-  function updateLabels() {
-    const w = sceneEl.clientWidth, h = sceneEl.clientHeight;
-    const pathIds = new Set(currentPath.map((n) => n.id));
-    const candidates = [];
-    for (const n of currentPath) if (n.id !== 0) candidates.push({ node: n, kind: 'path' });
-    if (hoverNode && hoverNode.id !== 0 && !pathIds.has(hoverNode.id)) candidates.push({ node: hoverNode, kind: 'hover' });
-    const scored = nodes
-      .filter((n) => n.id !== 0 && !pathIds.has(n.id) && n !== hoverNode)
-      .map((n) => ({ n, d: n.pos.distanceToSquared(camera.position) }));
-    scored.sort((a, b) => a.d - b.d);
-    for (const { n } of scored.slice(0, LABEL_COUNT)) candidates.push({ node: n, kind: 'near' });
-
-    const placed = []; // 画面に出した位置 [x, y]
-    let used = 0;
-    for (const { node, kind } of candidates) {
-      if (used >= labelPool.length) break;
-      const v = node.pos.clone().project(camera);
-      if (v.z < -1 || v.z > 1 || v.x < -1.1 || v.x > 1.1 || v.y < -1.1 || v.y > 1.1) continue;
-      const x = (v.x * 0.5 + 0.5) * w, y = (-v.y * 0.5 + 0.5) * h;
-      if (placed.some(([px, py]) => Math.hypot(px - x, py - y) < LABEL_MIN_GAP)) continue;
-      placed.push([x, y]);
-      const el = labelPool[used++];
-      el.style.left = `${x}px`;
-      el.style.top = `${y}px`;
-      el.textContent = node.char.toUpperCase();
-      el.classList.add('is-visible');
-      el.classList.toggle('is-path', kind === 'path');
-      el.classList.toggle('is-hover', kind === 'hover');
-    }
-    for (let i = used; i < labelPool.length; i++) labelPool[i].classList.remove('is-visible');
-  }
-
   // ---- 選択・道の光らせ方 ----
   let selectedId = 0;
-  let hoverNode = null;
+  let currentPath = []; // 根からの道（道を選んでいないときは空）
 
   function resetColors() {
     currentPath = [];
@@ -719,9 +736,10 @@ async function main() {
       highlightArcColor(node.id);
       if (i >= MAX_PATH) return;
       dummy.position.copy(node.pos);
-      dummy.scale.setScalar(nodeScale(node) * 1.3);
+      dummy.scale.setScalar(node.id === 0 ? 0 : nodeScale(node) * 1.3); // 根の球は光らせない
       dummy.updateMatrix();
       highlightMesh.setMatrixAt(i, dummy.matrix);
+      if (node.id !== 0) highlightGeo.attributes.aLetter.array[i] = letterIndex(node);
       if (node.parent) {
         const p = node.parent.pos, q = node.pos;
         pathLinePositions.set([p.x, p.y, p.z, q.x, q.y, q.z], segCount * 6);
@@ -732,6 +750,7 @@ async function main() {
     edgeGeo.attributes.color.needsUpdate = true;
     arcGeo.attributes.color.needsUpdate = true;
     highlightMesh.instanceMatrix.needsUpdate = true;
+    highlightGeo.attributes.aLetter.needsUpdate = true;
     pathLineGeo.attributes.position.needsUpdate = true;
     pathLineGeo.setDrawRange(0, segCount * 2);
   }
@@ -830,6 +849,7 @@ async function main() {
       }
       mesh.instanceMatrix.needsUpdate = true;
     }
+    for (const pick of pickMeshes) pick.computeBoundingSphere(); // 当たり判定の外枠を新しい位置に合わせる
     rootMesh.scale.setScalar(nodeScale(root));
     edgeNodeIds.forEach((id, i) => {
       const node = nodes[id];
@@ -873,7 +893,7 @@ async function main() {
       const id = arcOwnerByTriangle[hit.faceIndex];
       return id == null ? null : nodes[id];
     }
-    const hit = raycaster.intersectObjects(bucketMeshes)[0];
+    const hit = raycaster.intersectObjects(pickMeshes)[0];
     if (!hit || hit.instanceId == null) return null;
     const id = hit.object.userData.nodeIds[hit.instanceId];
     return nodes[id];
@@ -889,13 +909,6 @@ async function main() {
     const node = pickNode();
     if (node && node.id !== 0) selectNode(node.id);
   });
-  renderer.domElement.addEventListener('pointermove', (e) => {
-    if (e.pointerType === 'touch') return;
-    setPointerFromEvent(e);
-    const node = pickNode();
-    hoverNode = node && node.id !== 0 ? node : null;
-  });
-  renderer.domElement.addEventListener('pointerleave', () => { hoverNode = null; });
 
   // ---- 検索欄: 1 文字打つごとに道が伸びて光る ----
   searchInput.addEventListener('input', () => {
@@ -971,7 +984,6 @@ async function main() {
       camera.up.set(0, 1, 0);
       camera.lookAt(controls.target);
     }
-    updateLabels();
     renderer.render(scene, camera);
     requestAnimationFrame(tick);
   }
