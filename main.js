@@ -530,7 +530,7 @@ async function main() {
     bucketMeshes.push(mesh);
     const pick = new THREE.InstancedMesh(sphereGeo, pickMat, list.length);
     pick.instanceMatrix = mesh.instanceMatrix; // 位置・大きさは文字の板と共通
-    pick.userData.nodeIds = nodeIds;
+    mesh.userData.nodeIds = pick.userData.nodeIds = nodeIds;
     pick.visible = false; // 描かない（Raycaster は visible を見ないので当たり判定には使える）
     pickMeshes.push(pick);
     dimmables.push({ mat, color });
