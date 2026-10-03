@@ -275,23 +275,28 @@ function pathToRoot(node) {
 
 // ---- ノードの文字 ----
 
-// A〜Z を 8×4 のマスに並べた 1 枚の絵。縁を黒くして、文字どうしが重なっても読めるようにする
+// a〜z を 8×4 のマスに並べた 1 枚の絵。細めの幾何学的な書体（端末に入っているもの）で、
+// 縁を黒くして文字どうしが重なっても読めるようにする。
+// 小文字は高さがまちまち（b・g など）なので、字の形そのものをマスの真ん中に置く
 function makeLetterAtlas() {
   const cell = 128;
   const canvas = document.createElement('canvas');
   canvas.width = cell * 8;
   canvas.height = cell * 4;
   const ctx = canvas.getContext('2d');
-  ctx.font = `800 ${cell * 0.78}px system-ui, sans-serif`;
-  ctx.textAlign = 'center';
-  ctx.textBaseline = 'middle';
-  ctx.lineWidth = cell * 0.12;
+  ctx.font = `500 ${cell * 0.7}px 'Avenir Next', Futura, 'Segoe UI', Roboto, system-ui, sans-serif`;
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'alphabetic';
+  ctx.lineWidth = cell * 0.08;
   ctx.lineJoin = 'round';
   ctx.strokeStyle = '#000';
   ctx.fillStyle = '#fff';
   for (let i = 0; i < 26; i++) {
-    const ch = String.fromCharCode(65 + i);
-    const x = (i % 8 + 0.5) * cell, y = (Math.floor(i / 8) + 0.53) * cell;
+    const ch = String.fromCharCode(97 + i);
+    const m = ctx.measureText(ch);
+    const cx = (i % 8 + 0.5) * cell, cy = (Math.floor(i / 8) + 0.5) * cell;
+    const x = cx - (m.actualBoundingBoxRight - m.actualBoundingBoxLeft) / 2;
+    const y = cy + (m.actualBoundingBoxAscent - m.actualBoundingBoxDescent) / 2;
     ctx.strokeText(ch, x, y);
     ctx.fillText(ch, x, y);
   }
@@ -484,7 +489,7 @@ async function main() {
   }
   applyControlMode();
 
-  // ノード: 深さ 1 からはその文字（A〜Z）の板、根（深さ 0）だけ小さい球。
+  // ノード: 深さ 1 からはその文字（a〜z）の板、根（深さ 0）だけ小さい球。
   // 深さ・単語の終わりかどうかでまとめた InstancedMesh（色は材質ごとの固定色）。
   // instanceColor（ノードごとの色の書き換え）はブラウザによって描画されない個体があったため使わない。
   // 道を光らせるのは、同じ位置に重ねる InstancedMesh（highlightMesh）の表示・非表示で行う。
