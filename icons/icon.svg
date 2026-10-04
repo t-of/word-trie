@@ -1,1 +1,31 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><rect width="512" height="512" rx="112" fill="#05060d"/><text x="256" y="256" dy=".35em" text-anchor="middle" font-family="system-ui,sans-serif" font-weight="700" font-size="280" fill="#eceef3">W</text></svg>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <rect width="512" height="512" rx="112" fill="#05060d"/>
+  <g fill="#eceef3">
+    <circle cx="92" cy="120" r="3"/>
+    <circle cx="440" cy="100" r="2.5"/>
+    <circle cx="70" cy="300" r="2.5"/>
+    <circle cx="430" cy="340" r="3"/>
+    <circle cx="150" cy="430" r="2.5"/>
+    <circle cx="380" cy="440" r="2.5"/>
+    <circle cx="460" cy="220" r="2"/>
+    <circle cx="60" cy="420" r="2"/>
+  </g>
+  <g fill="none" stroke="#5d6b86" stroke-width="7" stroke-linecap="round">
+    <line x1="256" y1="130" x2="150" y2="230"/>
+    <line x1="256" y1="130" x2="362" y2="230"/>
+    <line x1="150" y1="230" x2="90" y2="330"/>
+    <line x1="150" y1="230" x2="200" y2="330"/>
+    <line x1="362" y1="230" x2="320" y2="330"/>
+  </g>
+  <g fill="none" stroke="#ffd35c" stroke-width="10" stroke-linecap="round">
+    <line x1="256" y1="130" x2="362" y2="230"/>
+    <line x1="362" y1="230" x2="422" y2="330"/>
+  </g>
+  <circle cx="256" cy="130" r="26" fill="#13151b" stroke="#ffd35c" stroke-width="9"/>
+  <circle cx="150" cy="230" r="20" fill="#13151b" stroke="#5d6b86" stroke-width="7"/>
+  <circle cx="362" cy="230" r="22" fill="#13151b" stroke="#ffd35c" stroke-width="9"/>
+  <circle cx="90"  cy="330" r="16" fill="#13151b" stroke="#5d6b86" stroke-width="6"/>
+  <circle cx="200" cy="330" r="16" fill="#13151b" stroke="#5d6b86" stroke-width="6"/>
+  <circle cx="320" cy="330" r="16" fill="#13151b" stroke="#5d6b86" stroke-width="6"/>
+  <circle cx="422" cy="330" r="20" fill="#13151b" stroke="#ffd35c" stroke-width="9"/>
+</svg>
